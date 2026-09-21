@@ -116,9 +116,11 @@ function readBuildMetadata(slot) {
   }
 }
 
-function armHandoff(target, slot, branch, commit) {
+function armHandoff(target, slot, branch, commit, sourceSlot) {
   const helper = path.join(root, 'scripts', 'local-release-helper.mjs');
-  const child = spawn(process.execPath, [helper, target.exe, statePath, slot, branch, commit], {
+  if (!sourceSlot) throw new Error('Cannot arm a restart handoff without a detected active local slot.');
+  const sourceExe = slotPaths(sourceSlot).exe;
+  const child = spawn(process.execPath, [helper, target.exe, statePath, slot, branch, commit, sourceExe], {
     cwd: root,
     detached: true,
     stdio: 'ignore',
@@ -137,10 +139,11 @@ const commit = git(['rev-parse', '--short=7', 'HEAD']);
 
 if (action === 'rollback') {
   if (!state) throw new Error('No active local release is recorded yet; rollback is unavailable.');
+  if (!detectedSlot) throw new Error('Rollback requires a currently running local release slot.');
   const targetSlot = other(state.active);
   const metadata = readBuildMetadata(targetSlot);
   const target = validate(targetSlot, metadata?.branch ?? null, metadata?.commit ?? null);
-  armHandoff(target, targetSlot, metadata?.branch ?? 'unknown', metadata?.commit ?? 'unknown');
+  armHandoff(target, targetSlot, metadata?.branch ?? 'unknown', metadata?.commit ?? 'unknown', detectedSlot);
   process.exit(0);
 }
 
@@ -158,7 +161,9 @@ if (action === 'swap') {
     console.log('First activation required: the currently running COS predates the local restart protocol.');
     console.log('Quit that build once via tray -> Quit, then launch the validated target above.');
     console.log('After that, fork:swap will detect the active slot automatically and future swaps are fully automatic.');
+  } else if (detectedSlot) {
+    armHandoff(target, targetSlot, branch, commit, detectedSlot);
   } else {
-    armHandoff(target, targetSlot, branch, commit);
+    throw new Error('No running local COS slot was detected; launch the validated target manually once.');
   }
 }
