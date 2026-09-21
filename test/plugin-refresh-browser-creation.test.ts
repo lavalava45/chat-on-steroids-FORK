@@ -29,6 +29,32 @@ it('keeps one operation on its original tab after marker loss, worker restart, a
   expect(create).toHaveBeenCalledTimes(1);
 });
 
+it('adopts an already-marked replacement helper after owner persistence is lost instead of creating a duplicate', async () => {
+  const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const saved: Record<string, unknown> = { pluginRefreshOwner: { id, tab: 7 } };
+  const replacement = { id: 8, url: `https://chatgpt.com/?cos-plugin-refresh=${id}#settings/Plugins` };
+  const create = vi.fn();
+  const sendMessage = vi.fn(async () => ({ ok: true }));
+  const storage = { session: { get: async () => saved, set: async (next: object) => { Object.assign(saved, next); } } };
+  const context = vm.createContext({
+    URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: create,
+    call: async () => ({ ok: true, data: { requests: [{ id, appId: null }] } }),
+    chrome: {
+      storage,
+      tabs: {
+        query: async () => [replacement],
+        get: async () => { throw Error('stale owner'); },
+        sendMessage,
+      },
+    },
+  });
+  vm.runInContext(`${workflow}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
+  await context.run([{}], true);
+  expect(create).not.toHaveBeenCalled();
+  expect(saved.pluginRefreshOwner).toEqual({ id, tab: 8 });
+  expect(sendMessage).toHaveBeenCalledWith(8, { type: 'clf-plugin-refresh', request: { id, appId: null } });
+});
+
 it('does not create a plugin helper in browser-only mode', async () => {
   const create = vi.fn();
   const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: create,
