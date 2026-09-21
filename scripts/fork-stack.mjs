@@ -188,7 +188,9 @@ const focusedTests = [
   'test/plugin-refresh.test.ts',
   'test/plugin-refresh-browser-creation.test.ts',
   'test/plugins-ipc-refresh.test.ts',
-  'test/extension.test.ts'
+  'test/extension.test.ts',
+  'test/continuation.test.ts',
+  'test/session.test.ts'
 ].filter((file) => fs.existsSync(path.join(root, file)));
 
 function verify() {

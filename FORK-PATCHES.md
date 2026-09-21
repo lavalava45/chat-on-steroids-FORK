@@ -24,6 +24,7 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 4 | `upstream-362-plugin-refresh` | upstream-pending | Explicit Restart re-arms one unclaimed plugin refresh attempt. Upstream issue #362 / PR #363. Drop when upstream contains it. |
 | 5 | `patch-stack-tooling` | permanent | Reproducible upstream replay, focused validation, status reporting, and this manifest. |
 | 6 | `third-party-358-bounded-recovery` | third-party-open | Adapt upstream PR #358 to stop endless unclaimed browser recovery offers; excludes its accidental `node_modules` file and adds fork guards for manual compaction and stale SPA activity. Drop when upstream contains an accepted equivalent. |
+| 7 | `third-party-341-stop-compaction` | third-party-open | Adapt upstream PR #341 so an oversized run gets one fresh auto-compaction chance when its proven work episode stops; excludes `node_modules` and preserves newer current-main lifecycle guards. Drop when upstream contains an accepted equivalent. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 

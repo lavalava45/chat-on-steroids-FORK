@@ -5711,6 +5711,8 @@ interface ActivityGrant {
   thinkingFailed?: true;
   /** Exact source-turn MCP proof; only a full final response consumes its silence window. */
   mcpBacked?: true;
+  /** This exact stopped-work episode already opened its one post-stop compaction ticket. */
+  stoppedCompactionOffered?: true;
 }
 
 const activeUntil = new Map<string, ActivityGrant>();
@@ -5944,9 +5946,16 @@ async function failedCompactionTurnCurrent(conversationId: string, sessionId: st
   return !!after && after.conversationId === conversationId && !after.activeTurnId && after.events === before.events;
 }
 
-async function considerAutomaticCompaction(conversationId: string, sessionId: string, failedTurn?: string): Promise<void> {
+async function considerAutomaticCompaction(
+  conversationId: string,
+  sessionId: string,
+  failedTurn?: string,
+  stoppedGrant?: ActivityGrant
+): Promise<void> {
+  const workJustStopped = stoppedGrant !== undefined;
   if (!getConfig().compaction.auto || compactionFilings.has(conversationId)) return;
   if (goalFencedChat(conversationId) || continuationForSession(sessionId) || stopRequestedFor(conversationId)) return;
+  if (stoppedGrant && (activeUntil.get(conversationId) !== stoppedGrant || stoppedGrant.stoppedCompactionOffered)) return;
   // Exact tool attribution already owns this grant and consumes it on final/Stop.
   // Re-read it after storage awaits, rather than carrying a stale boolean or
   // maintaining a second blind-page clock beside the existing activity owner.
@@ -5956,24 +5965,29 @@ async function considerAutomaticCompaction(conversationId: string, sessionId: st
     return chatIsWorking(conversationId) || Boolean(grant?.sessionId === sessionId && grant.mcpBacked &&
       !grant.thinkingFailed && grant.evidenceAt <= now && grant.until > now);
   };
-  if (!failedTurn && !hasCurrentWork()) return;
+  if (!failedTurn && !workJustStopped && !hasCurrentWork()) return;
   compactionFilings.add(conversationId);
   try {
     const summary = await getSession(sessionId).catch(() => null);
-    if (!summary || summary.conversationId !== conversationId || summary.endedAt !== null || summary.browserRecoveryDismissedAt !== undefined || !autoCompactionReady(summary)) return;
+    if (stoppedGrant && activeUntil.get(conversationId) !== stoppedGrant) return;
+    if (!summary || summary.conversationId !== conversationId || summary.endedAt !== null || summary.browserRecoveryDismissedAt !== undefined || !autoCompactionReady(summary, workJustStopped)) return;
     if (await conversationWasSuperseded(conversationId)) return;
     if (failedTurn && !await failedCompactionTurnCurrent(conversationId, sessionId, failedTurn)) return;
     // Re-read after the awaits: the turn may have ended, or a page may have filed by hand.
     const current = await getSession(sessionId);
-    if (!current || current.conversationId !== conversationId || current.endedAt !== null || current.browserRecoveryDismissedAt !== undefined || !autoCompactionReady(current)) return;
+    if (stoppedGrant && activeUntil.get(conversationId) !== stoppedGrant) return;
+    if (!current || current.conversationId !== conversationId || current.endedAt !== null || current.browserRecoveryDismissedAt !== undefined || !autoCompactionReady(current, workJustStopped)) return;
     if (failedTurn && !await failedCompactionTurnCurrent(conversationId, sessionId, failedTurn)) return;
-    if ((!failedTurn && !hasCurrentWork()) || continuationForSession(sessionId) || goalFencedChat(conversationId) ||
+    if ((!failedTurn && !workJustStopped && !hasCurrentWork()) ||
+        (stoppedGrant && activeUntil.get(conversationId) !== stoppedGrant) ||
+        continuationForSession(sessionId) || goalFencedChat(conversationId) ||
         stopRequestedFor(conversationId) || !getConfig().compaction.auto || !automaticCompactionAllowed(current)) return;
     const opened = await openContinuationNow(sessionId, conversationId, true);
+    if (stoppedGrant) stoppedGrant.stoppedCompactionOffered = true;
     rememberToken(sessionId, opened.token);
     changed();
     logInfo(
-      `bridge: ${conversationId} ${failedTurn ? 'lost its current turn' : 'is working'} at ${current.contextTokens} context tokens — filed auto-compaction ticket ${opened.token.slice(0, 8)}`
+      `bridge: ${conversationId} ${failedTurn ? 'lost its current turn' : workJustStopped ? 'stopped working' : 'is working'} at ${current.contextTokens} context tokens — filed auto-compaction ticket ${opened.token.slice(0, 8)}`
     );
   } catch (err) {
     logWarn(`bridge: could not file the auto-compaction ticket for ${conversationId} — ${err instanceof Error ? err.message : String(err)}`);
@@ -7067,6 +7081,7 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
   let queued = false;
   let deferred = false;
   const spent: string[] = [];
+  const stopped = new Map<string, ActivityGrant>();
   const compacting = new Set(pendingContinuations().map((entry) => entry.from));
   for (const [conversationId, grant] of activeUntil) {
     if (compacting.has(conversationId)) continue;
@@ -7074,7 +7089,10 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
     // Observation owns liveness, never permission to interrupt the native page.
     // Only an exactly recorded local call in this source turn earns silence repair.
     if (!grant.turnId || !await turnHasMcpCall(grant.sessionId, conversationId, grant.turnId)) {
-      if (activeUntil.get(conversationId) === grant) spent.push(conversationId);
+      if (activeUntil.get(conversationId) === grant) {
+        spent.push(conversationId);
+        stopped.set(conversationId, grant);
+      }
       continue;
     }
     const pro = await extendedSilenceWindowFor(conversationId, grant.sessionId);
@@ -7092,6 +7110,7 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
     // sleeps it from the block itself, grant or no grant.)
     if (isChatBlocked(conversationId)) {
       spent.push(conversationId);
+      stopped.set(conversationId, grant);
       continue;
     }
     // Only positively identified Pro work earns the longer recovery clock.
@@ -7110,6 +7129,7 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
         continue;
       }
       spent.push(conversationId);
+      stopped.set(conversationId, grant);
       continue;
     }
     const held = repairsInFlight.get(conversationId);
@@ -7120,13 +7140,17 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
         continue;
       }
       spent.push(conversationId);
+      stopped.set(conversationId, grant);
       continue;
     }
     // A turn-scoped repair is a different question about a different subject, and is superseded
     // below rather than obeyed here; reading one as "a recovery is already running" is what left
     // a chat that had been dead for eighteen minutes unreloaded. Everything else in flight —
     // silence's own action, or a no-tab reopen under its floor — is this path already acting.
-    if (held && !TURN_SCOPED_REPAIRS.has(held.reason)) continue;
+    if (held && !TURN_SCOPED_REPAIRS.has(held.reason)) {
+      stopped.set(conversationId, grant);
+      continue;
+    }
     // A reload carried out moments ago, that the page has not yet come back from, is the reload
     // silence would ask for. A large chat takes minutes to come back — three, for the 300k-token
     // prime of 2026-09-03 — and a second reload landing on a page still loading starts that wait
@@ -7148,11 +7172,15 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
         // Preserve its original silence deadline so a real page return does
         // not pretend to be fresh work or start another waiting window.
         if (!grant.thinkingFailed && now < activityDeadline(grant)) deferred = true;
-        else spent.push(conversationId);
+        else {
+          spent.push(conversationId);
+          stopped.set(conversationId, grant);
+        }
       }
       continue;
     }
     if (activeUntil.get(conversationId) !== grant) continue;
+    stopped.set(conversationId, grant);
     if (queueBrowserRecovery(conversationId, grant.sessionId, `silence:${grant.until}`, 'silence', 0, now)) {
       queued = true;
       logInfo(
@@ -7161,6 +7189,9 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
     }
   }
   if (deferred) armSilenceSweep(now);
+  for (const [conversationId, grant] of stopped) {
+    void considerAutomaticCompaction(conversationId, grant.sessionId, undefined, grant);
+  }
   return { queued, spent };
 }
 

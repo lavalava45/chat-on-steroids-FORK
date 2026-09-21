@@ -192,6 +192,7 @@ describe('capturing the brief', () => {
     await resetSessionStoreForTests();
     const restored = (await getSession(summary.id))!;
     expect(store.autoCompactionReady({ ...restored, contextTokens: 1_000_000 })).toBe(false);
+    expect(store.autoCompactionReady({ ...restored, contextTokens: 1_000_000 }, true)).toBe(true);
     await store.appendEvent(summary.id, { time: 2, source: 'extension', kind: 'turn_start', turnId: 'next' });
     expect(store.autoCompactionReady({ ...(await getSession(summary.id))!, contextTokens: 1_000_000 })).toBe(true);
   });

@@ -1981,6 +1981,50 @@ describe('automatic compaction', () => {
     expect(repair).toBeNull();
   });
 
+  it('files a ticket when an over-the-line chat stops working, not only while it works', async () => {
+    await pair();
+    const conversationId = randomUUID();
+    const base = getConfig();
+    await saveConfig({ ...base, compaction: { ...base.compaction, auto: true, autoTokens: 10_000 } });
+    vi.useFakeTimers();
+    try {
+      await request('POST', '/events', { body: { conversationId, events: [
+        { kind: 'user_message', time: Date.now(), text: 'x'.repeat(44_000), messageId: 'over-the-line-stop' }
+      ] } });
+      const work = async (index: number): Promise<void> => {
+        const requestId = `wfr_stopped_work_${index}`;
+        await request('POST', '/events', { body: { conversationId, events: [{
+          kind: 'tool_evidence', time: Date.now(),
+          calls: [{ messageId: `m-stop-${index}`, tool: 'read', order: 0, answered: false, requestId }]
+        }] } });
+        await recordToolCall({ tool: 'read', args: { paths: ['/project/mine.ts'] },
+          content: [{ type: 'text', text: 'ok' }], outcome: 'ok', durationMs: 1,
+          startedAt: Date.now(), requestId });
+      };
+
+      await work(1);
+      await vi.waitFor(() => expect(getLog().some(entry =>
+        entry.message.includes('filed auto-compaction ticket'))).toBe(true));
+
+      const session = (await findSessionByConversation(conversationId))!;
+      const token = continuationForSession(session.id)!.token;
+      await request('POST', '/compact', { body: { conversationId, token, sourceLost: true } });
+      expect(continuationForSession(session.id), 'the ticket survived its own loss').toBeFalsy();
+
+      const filedBefore = getLog().filter(entry => entry.message.includes('filed auto-compaction ticket')).length;
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+
+      await vi.waitFor(() => expect(
+        getLog().filter(entry => entry.message.includes('filed auto-compaction ticket')).length
+      ).toBeGreaterThan(filedBefore));
+      expect(getLog().some(entry => entry.message.includes('stopped working')),
+        'the ticket was filed for some other reason than the run ending').toBe(true);
+    } finally {
+      vi.useRealTimers();
+      await saveConfig(base);
+    }
+  });
+
   it.each(['cancelled', 'replaced', 'dispatched'] as const)('opens a manual source immediately and revokes a %s ticket before browser action', async scenario => {
     await pair();
     const conversationId = randomUUID();
@@ -6241,6 +6285,57 @@ describe('unattributed activity recovery', () => {
         expect((await sessionControlsFor(ids[1]!)).recovery).toEqual([]);
       }
     } finally { vi.useRealTimers(); }
+  });
+
+  it('files a compaction ticket for a chat that goes quiet into a silence repair, once per stopped work episode', async () => {
+    vi.useFakeTimers();
+    const base = getConfig();
+    try {
+      await pair();
+      await saveConfig({
+        ...base,
+        compaction: { ...base.compaction, auto: true, autoTokens: 10_000 },
+        multiAgent: { ...base.multiAgent, recoverAgentTabs: true }
+      });
+      const chat = randomUUID();
+      await events(chat, [
+        { kind: 'user_message', time: Date.now(), text: 'x'.repeat(44_000), messageId: 'quiet-over-the-line' },
+        openTurn('quiet-turn')
+      ]);
+      await attributed(chat, false, Date.now());
+      await vi.waitFor(() => expect(getLog().some(entry =>
+        entry.message.includes('filed auto-compaction ticket'))).toBe(true));
+
+      const session = (await findSessionByConversation(chat))!;
+      await request('POST', '/compact', {
+        body: { conversationId: chat, token: continuationForSession(session.id)!.token, sourceLost: true }
+      });
+      const filedBefore = getLog().filter(entry => entry.message.includes('filed auto-compaction ticket')).length;
+
+      await vi.advanceTimersByTimeAsync(CHAT_SILENCE_MS + 60_000);
+      await sweepStaleSwarm(Date.now());
+      expect(getLog().some(entry => entry.message.includes('asking the browser to reload')),
+        'no silence repair was queued — the test is not in the state it claims').toBe(true);
+
+      await vi.waitFor(() => expect(
+        getLog().filter(entry => entry.message.includes('filed auto-compaction ticket')).length
+      ).toBeGreaterThan(filedBefore));
+      expect(getLog().some(entry => entry.message.includes('stopped working'))).toBe(true);
+
+      const stoppedTicket = continuationForSession(session.id)!;
+      const afterStopped = getLog().filter(entry => entry.message.includes('filed auto-compaction ticket')).length;
+      await request('POST', '/compact', {
+        body: { conversationId: chat, token: stoppedTicket.token, sourceLost: true }
+      });
+      await sweepStaleSwarm(Date.now());
+      await vi.advanceTimersByTimeAsync(60_000);
+      await sweepStaleSwarm(Date.now());
+      expect(getLog().filter(entry => entry.message.includes('filed auto-compaction ticket')).length)
+        .toBe(afterStopped);
+    } finally {
+      vi.useRealTimers();
+      await saveConfig(base);
+    }
   });
 
   it.each(['gpt-6-pro', 'GPT-5.6 Sol'])('projects the confirmed Thinking-failed wait and removes it on fresh work (%s)', async model => {

@@ -1028,10 +1028,10 @@ export function automaticCompactionAllowed(summary?: SessionSummary | null): boo
     !(selected?.conversationId === summary?.conversationId && isProModel(selected?.model, selected?.reasoningEffort));
 }
 
-export function autoCompactionReady(summary: SessionSummary | null | undefined): boolean {
+export function autoCompactionReady(summary: SessionSummary | null | undefined, workJustStopped = false): boolean {
   if (!summary) return false;
   const refusal = summary.autoCompactionRefusal;
-  if (refusal?.conversationId === summary.conversationId &&
+  if (!workJustStopped && refusal?.conversationId === summary.conversationId &&
       (!summary.activeTurnId || summary.activeTurnId === refusal.turnId)) return false;
   const config = getConfig().compaction;
   return automaticCompactionAllowed(summary) && config.autoTokens > 0 && summary.contextTokens >= config.autoTokens;
