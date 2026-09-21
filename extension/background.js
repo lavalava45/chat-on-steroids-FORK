@@ -2125,14 +2125,28 @@ function inspectRequestedPluginRefresh(publications, background, browserOnly = f
     // A provider SPA transition strips our query. The operation still owns the same
     // tab: preserve that identity across MV3 suspension before inspecting its URL.
     if (owner && requests.some(request => request.id === owner.id)) {
-      const current = await chrome.tabs.get(owner.tab).catch(() => null);
-      if (!current) return; // A user-closed helper is not permission to reopen it every poll.
+      let current = await chrome.tabs.get(owner.tab).catch(() => null);
+      if (!current) {
+        // Creation may have succeeded just before MV3 suspension while the owner write
+        // was lost. Adopt the already-marked helper; never create a second one here.
+        current = tabs.find(tab => pluginRefreshMarker(tab) === owner.id) || null;
+        if (!current) return; // A user-closed helper is not permission to reopen it every poll.
+        await chrome.storage.session.set({ pluginRefreshOwner: { id: owner.id, tab: current.id } });
+      }
       if (pluginRefreshMarker(current) !== owner.id) {
         const url = new URL(current.pendingUrl || current.url || '');
-        if (url.origin !== 'https://chatgpt.com' || url.pathname !== '/' || !/^#settings\/Plugins(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash)) return;
-        url.searchParams.set('cos-plugin-refresh', owner.id);
-        await chrome.tabs.update(current.id, { url: url.href });
-        return;
+        if (url.origin !== 'https://chatgpt.com' || url.pathname !== '/' || !/^#settings\/Plugins(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash)) {
+          // The owned tab became ordinary user navigation. It must not be repurposed.
+          // A separately marked helper from a pre-suspension create may still be adopted.
+          const replacement = tabs.find(tab => pluginRefreshMarker(tab) === owner.id);
+          if (!replacement) return;
+          current = replacement;
+          await chrome.storage.session.set({ pluginRefreshOwner: { id: owner.id, tab: current.id } });
+        } else {
+          url.searchParams.set('cos-plugin-refresh', owner.id);
+          await chrome.tabs.update(current.id, { url: url.href });
+          return;
+        }
       }
     }
     for (const tab of tabs) {

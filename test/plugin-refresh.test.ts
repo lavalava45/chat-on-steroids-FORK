@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const wake = vi.hoisted(() => vi.fn());
 vi.mock('../src/main/browser-wake.js', () => ({ wakeBrowserWork: wake }));
 import { initDurableStore, resetDurableForTests, readDurable, writeDurableNow } from '../src/main/durable.js';
-import { claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh, pendingPluginRefreshes, pluginRefreshPublications, publishPluginSurface, resetPluginRefreshForTests, unpublishPluginSurface } from '../src/main/plugin-refresh.js';
+import { claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh, pendingPluginRefreshes, pluginRefreshPublications, publishPluginSurface, rearmPluginRefresh, resetPluginRefreshForTests, unpublishPluginSurface } from '../src/main/plugin-refresh.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 import { buildServer } from '../src/main/mcp/tools.js';
 import { defaultConfig } from '../src/main/config.js';
@@ -48,6 +48,21 @@ it('wakes a settled publication restored after its deadline elapsed while discon
   publishPluginSurface('core', 'Chat On Steroids Core', '1', '', changed);
   expect(wake).toHaveBeenCalledTimes(2);
   expect((await pendingPluginRefreshes())[0]?.tools).toEqual(changed);
+});
+it('rearms only an unclaimed pending declaration for an explicit plugin restart', async () => {
+  publish();
+  const first = (await pendingPluginRefreshes())[0]!;
+  expect(await rearmPluginRefresh('core')).toBe(true);
+  const second = (await pendingPluginRefreshes())[0]!;
+  expect(second.id).not.toBe(first.id);
+  expect(second.schemaId).toBe(first.schemaId);
+  expect(wake).toHaveBeenCalledTimes(2);
+
+  expect(await claim(second)).toBe(true);
+  expect(await rearmPluginRefresh('core')).toBe(false);
+  const stored = (await readDurable('plugin-refresh') as any[])[0]!;
+  expect(stored.id).toBe(second.id);
+  expect(stored.attempted).toBe(true);
 });
 it('wakes existing browser transport once per changed publication, not unchanged settings', () => {
   publish(); expect(wake).toHaveBeenCalledTimes(1);
