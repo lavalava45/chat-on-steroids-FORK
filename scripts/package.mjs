@@ -16,6 +16,7 @@ function value(name, fallback) {
 const platform = normalizePlatform(value('platform', process.platform));
 const arches = value('arch', process.arch).split(',').map((item) => normalizeArch(item.trim()));
 const dirOnly = args.includes('--dir');
+const output = value('output', '');
 
 function run(command, commandArgs, env = process.env) {
   const result = spawnSync(command, commandArgs, { cwd: root, stdio: 'inherit', env });
@@ -43,5 +44,6 @@ for (const arch of arches) {
     'never'
   ];
   if (dirOnly) builderArgs.push('--dir');
+  if (output) builderArgs.push(`--config.directories.output=${output}`);
   run(node, builderArgs, { ...process.env, COS_PACKAGE_ARCH: arch });
 }
