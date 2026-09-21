@@ -65,6 +65,7 @@ import {
 } from './session/continuation.js';
 import { runShutdownSequence } from './shutdown.js';
 import { buildWindowTitle } from './build-identity.js';
+import { forkRestartRequested } from './fork-restart.js';
 import { applyStagedUpdate, startUpdateChecks } from './update.js';
 import { UI_BASE_ZOOM, windowLayoutForWorkArea, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { openInPreferredBrowser } from './browser.js';
@@ -301,6 +302,11 @@ function refreshTray(): void {
 }
 
 app.on('second-instance', (_event, argv) => {
+  if (forkRestartRequested(argv)) {
+    quitting = true;
+    app.quit();
+    return;
+  }
   if (!isBackgroundLaunch(argv)) windowActivation.request();
 });
 
