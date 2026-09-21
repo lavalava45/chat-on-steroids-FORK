@@ -909,4 +909,20 @@ describe('enabled plugin process ownership', () => {
     expect(await h.pids()).toHaveLength(2);
     expect(alive((await h.pids())[1]!.pid)).toBe(true);
   });
+
+  it('imports and normalizes a legacy single-plugin durable record instead of dropping it', async () => {
+    await manager.install({ name: 'Existing COS plugin', source: { kind: 'command', command: process.execPath, args: [entry] } });
+    await manager.close();
+    const file = path.join(dir, 'state', 'plugins.json');
+    const [stored] = JSON.parse(await fs.readFile(file, 'utf8'));
+    await fs.writeFile(file, JSON.stringify(stored));
+
+    manager = new PluginManager();
+    await manager.initialize(dir);
+
+    expect(manager.snapshot().plugins).toHaveLength(1);
+    expect(manager.snapshot().plugins[0]!.name).toBe('Existing COS plugin');
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual([stored]);
+    await vi.waitFor(() => expect(manager.snapshot().plugins[0]!.status).toBe('ready'));
+  });
 });
