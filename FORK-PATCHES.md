@@ -10,6 +10,8 @@ This fork is intentionally maintained as a small linear patch stack on top of th
 4. Upstreamable fixes made here stay temporary and are removed once upstream contains the equivalent fix.
 5. Before every upstream replay, Git creates a rollback branch. `rerere` is enabled so repeated conflict resolutions can be reused, but `rerere.autoupdate` stays off so reused resolutions are never auto-staged.
 
+When a third-party PR is imported early by explicit choice, it is kept as one clearly labelled temporary patch and removed as soon as upstream contains an accepted equivalent.
+
 ## Patch registry
 
 This table records the fork patches we maintain or have sent upstream. The authoritative list of patches currently applied to `our-release` is `npm run fork:stack:status`.
@@ -21,6 +23,7 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 3 | `upstream-350-plugin-route` | upstream-pending | Fix stale ChatGPT Plugins route. Upstream issue #350 / PR #351. Drop when upstream contains it. |
 | 4 | `upstream-362-plugin-refresh` | upstream-pending | Explicit Restart re-arms one unclaimed plugin refresh attempt. Upstream issue #362 / PR #363. Drop when upstream contains it. |
 | 5 | `patch-stack-tooling` | permanent | Reproducible upstream replay, focused validation, status reporting, and this manifest. |
+| 6 | `third-party-358-bounded-recovery` | third-party-open | Adapt upstream PR #358 to stop endless unclaimed browser recovery offers; excludes its accidental `node_modules` file and adds fork guards for manual compaction and stale SPA activity. Drop when upstream contains an accepted equivalent. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 

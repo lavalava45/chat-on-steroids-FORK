@@ -996,6 +996,7 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
       let handed = false;
       let resolved = false;
       let navigated = false;
+      let deferred = 0;
       const trace: string[] = [];
       const fetch = vi.fn(async (input: string, init: Record<string, unknown> = {}) => {
         const url = new URL(input);
@@ -1006,6 +1007,11 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
           expect(init.method).toBe('POST');
           expect(JSON.parse(String(init.body))).toEqual({ token: 'attribution-attempt' });
           return mode === 'claim-unavailable' ? response(503, {}) : response(200, { allowed: !resolved });
+        }
+        if (url.pathname === '/repairs/defer') {
+          deferred++;
+          expect(JSON.parse(String(init.body))).toEqual({ token: 'attribution-attempt' });
+          return response(200, { ok: true });
         }
         if (url.pathname === '/status') {
           if (url.searchParams.has('repaired')) trace.push('repaired');
@@ -1043,6 +1049,7 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
         expect(worker.tabsReload).not.toHaveBeenCalled();
         expect(trace).not.toContain('repaired');
       }
+      expect(deferred).toBe(mode === 'resolved-during-scan' || mode === 'claim-unavailable' ? 1 : 0);
       expect(worker.tabsCreate).not.toHaveBeenCalled();
     }
   );
@@ -1055,11 +1062,12 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
    */
   it.each(['stop-before-claim', 'work-after-claim', 'stop-after-claim', 'navigation-after-claim'] as const)(
     'vetoes the exact browser repair at its last page check: %s', async scenario => {
-      let armed = false, handed = false, claimed = false, receipts = 0;
+      let armed = false, handed = false, claimed = false, receipts = 0, deferred = 0;
       const fetch = vi.fn(async (input: string) => {
         const url = new URL(input);
         if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
         if (url.pathname === '/repairs/claim') { claimed = true; return response(200, { allowed: true }); }
+        if (url.pathname === '/repairs/defer') { deferred++; return response(200, { ok: true }); }
         if (url.pathname === '/status') {
           if (url.searchParams.has('repaired')) receipts++;
           if (armed && !handed) { handed = true; return response(200, { repairs: [{ conversationId: CHAT,
@@ -1087,15 +1095,17 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
       expect(worker.tabsReload).not.toHaveBeenCalled();
       expect(worker.tabsCreate).not.toHaveBeenCalled();
       expect(receipts).toBe(0);
+      expect(deferred).toBe(scenario === 'stop-before-claim' ? 1 : 0);
     });
 
   it.each(['empty', 'draft-before-claim', 'draft-after-claim', 'question-after-claim', 'unresponsive'] as const)(
     'preserves the compaction draft at the browser claim boundary: %s', async scenario => {
-      let armed = false, handed = false, claimed = false, repaired = 0, failed = 0;
+      let armed = false, handed = false, claimed = false, repaired = 0, failed = 0, deferred = 0;
       const fetch = vi.fn(async (input: string) => {
         const url = new URL(input);
         if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
         if (url.pathname === '/repairs/claim') { claimed = true; return response(200, { allowed: true }); }
+        if (url.pathname === '/repairs/defer') { deferred++; return response(200, { ok: true }); }
         if (url.pathname === '/status') {
           if (url.searchParams.has('repaired')) repaired++;
           if (url.searchParams.has('repairFailed')) failed++;
@@ -1129,6 +1139,7 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
       expect(repaired).toBe(reloads);
       expect(claimed).toBe(scenario !== 'draft-before-claim');
       expect(failed).toBe(scenario === 'draft-after-claim' || scenario === 'question-after-claim' ? 1 : 0);
+      expect(deferred).toBe(scenario === 'draft-before-claim' ? 1 : 0);
       expect(checks).toHaveLength(claimed ? 2 : 1);
       expect(checks.every(message => message.draftOnly === true)).toBe(true);
       if (claimed && scenario !== 'unresponsive') expect(checks[1]!.expected)
@@ -3214,6 +3225,64 @@ describe('extension observation journal', () => {
       { route: '/goal/draft', client: '73' },
       { route: '/goal/ack', client: '73' }
     ]);
+  });
+
+  it('does not use a stale activity poll as proof that a pageless chat returned', async () => {
+    const a = '11111111-2222-3333-4444-555555555555';
+    const b = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const local = new FakeStorageArea({ port: 8765, token: 'paired-token' });
+    const session = new FakeStorageArea();
+    const calls: string[] = [];
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      calls.push(url.pathname);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/activity') return response(200, {
+        sessionId: 'wrong-chat', stream: [], pagePresenceRequired: true
+      });
+      if (url.pathname === '/repairs/page-present') return response(200, { ok: true });
+      return response(200, {});
+    });
+    const worker = loadWorker({
+      local,
+      session,
+      fetch,
+      tabsGet: vi.fn(async (tabId) => ({ id: tabId, url: `https://chatgpt.com/c/${b}`, status: 'complete' }))
+    });
+
+    expect(await worker.send({ type: 'bind', conversationId: b }, 73)).toMatchObject({ ok: true });
+    const stale = await worker.send({ type: 'activity', conversationId: a, since: 0 }, 73);
+
+    expect(stale).toMatchObject({ ok: false, error: 'stale_document' });
+    expect(session.data.tabConversations).toEqual({ '73': b });
+    expect(calls).not.toContain('/activity');
+    expect(calls).not.toContain('/repairs/page-present');
+  });
+
+  it('confirms exact page presence only after activity returns on the same conversation route', async () => {
+    const conversationId = '11111111-2222-3333-4444-555555555555';
+    const local = new FakeStorageArea({ port: 8765, token: 'paired-token' });
+    const session = new FakeStorageArea();
+    const calls: string[] = [];
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      calls.push(url.pathname);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/activity') return response(200, {
+        sessionId: 'session', stream: [], pagePresenceRequired: true
+      });
+      if (url.pathname === '/repairs/page-present') return response(200, { ok: true, cleared: true });
+      return response(200, {});
+    });
+    const worker = loadWorker({
+      local,
+      session,
+      fetch,
+      tabsGet: vi.fn(async (tabId) => ({ id: tabId, url: `https://chatgpt.com/c/${conversationId}`, status: 'complete' }))
+    });
+
+    expect(await worker.send({ type: 'activity', conversationId, since: 0 }, 74)).toMatchObject({ ok: true });
+    expect(calls).toContain('/repairs/page-present');
   });
 
   it('forwards the page-model helper health, and only the words the page may say', async () => {

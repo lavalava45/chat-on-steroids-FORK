@@ -120,7 +120,7 @@ function requireStackMetadata(rows) {
     if (!row.patch || !row.status) {
       throw new Error(`Fork stack commit ${row.commit} is missing Fork-Patch metadata.`);
     }
-    if (row.status !== 'permanent' && row.status !== 'upstream-pending') {
+    if (!['permanent', 'upstream-pending', 'third-party-open'].includes(row.status)) {
       throw new Error(`Fork stack commit ${row.commit} has unsupported status ${row.status}.`);
     }
     if (seen.has(row.patch)) throw new Error(`Fork patch id ${row.patch} appears more than once.`);
@@ -187,7 +187,8 @@ const focusedTests = [
   'test/plugins-ui.test.ts',
   'test/plugin-refresh.test.ts',
   'test/plugin-refresh-browser-creation.test.ts',
-  'test/plugins-ipc-refresh.test.ts'
+  'test/plugins-ipc-refresh.test.ts',
+  'test/extension.test.ts'
 ].filter((file) => fs.existsSync(path.join(root, file)));
 
 function verify() {
@@ -199,6 +200,9 @@ function verify() {
   git(['diff', '--check', `${base}...HEAD`]);
   runNpm(['run', 'typecheck']);
   if (focusedTests.length) runNpm(['exec', '--', 'vitest', 'run', ...focusedTests]);
+  if (fs.existsSync(path.join(root, 'test/bridge.test.ts'))) {
+    runNpm(['exec', '--', 'vitest', 'run', 'test/bridge.test.ts', '-t', 'automatic compaction']);
+  }
   runNpm(['run', 'build']);
   printStatus();
   if (pendingSync) {

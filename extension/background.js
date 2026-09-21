@@ -2698,9 +2698,25 @@ async function performBrowserRepairs(repairs, policy) {
         const draftOnly = reason === 'compaction';
         const check = inspectTurn ? await tabReply(target.id,
           { type: 'clf-repair-check', conversationId, draftOnly }, documentId ? { documentId } : undefined) : null;
-        if (check?.safe === false) continue;
+        if (check?.safe === false) {
+          // This is not a missed handout: the live page received it and deliberately deferred the
+          // browser action because native work/draft state makes acting unsafe right now. Tell main
+          // so its bounded "nobody is listening" budget does not mistake a responsive page for a
+          // missing one. The same token remains unclaimed and can be reconsidered later.
+          await call('/repairs/defer', { method: 'POST', body: JSON.stringify({ token }) });
+          continue;
+        }
         const claim = await call('/repairs/claim', { method: 'POST', body: JSON.stringify({ token }) });
-        if (!claim.ok || claim.data?.allowed !== true) continue;
+        if (!claim.ok || claim.data?.allowed !== true) {
+          // The exact live page already answered the pre-action check. A transient bridge-side
+          // refusal (for example while an observation is still being committed) is therefore not
+          // evidence that nobody is listening. Preserve the same unclaimed handout while resetting
+          // only its no-listener budget. Targetless/unresponsive paths deliberately do not defer.
+          if (inspectTurn && check?.safe === true) {
+            await call('/repairs/defer', { method: 'POST', body: JSON.stringify({ token }) });
+          }
+          continue;
+        }
         if (target && !suspended) {
           const latest = inspectTurn ? await tabReply(target.id, { type: 'clf-repair-check', conversationId, draftOnly,
             ...(check?.safe === true ? { expected: { revision: check.revision, turnId: check.turnId, questionId: check.questionId } } : {}) },
@@ -3348,18 +3364,39 @@ const HANDLERS = {
   async activity(message, _sender, source) {
     await load();
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
-    await noteTabConversation(source, message.conversationId);
+    const conversationId = cleanConversationId(message.conversationId);
+    if (!conversationId) return { ok: false, error: 'bad_conversation_id' };
+    // Activity is allowed to establish a tab's first conversation, but it may not overwrite an
+    // already-known different conversation on message authority alone. A same-document SPA move
+    // keeps the document lease alive, so a late poll from A can arrive after B has already bound
+    // this tab; require Chrome's exact current route before accepting such a transition.
+    const knownConversation = cleanConversationId(tabConversations[String(source.tab)]);
+    if (knownConversation && knownConversation !== conversationId &&
+        !(await currentConversationDocument(source, conversationId))) {
+      return { ok: false, error: 'stale_document' };
+    }
+    await noteTabConversation(source, conversationId);
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
     // Goal drafts are conversation-scoped in the app but browser writes are tab-scoped. Tell
     // the app which tab is polling so two tabs showing the same chat cannot both receive and
     // submit one ready Goal draft.
     const query =
-      `?conversationId=${encodeURIComponent(message.conversationId)}` +
+      `?conversationId=${encodeURIComponent(conversationId)}` +
       `&since=${Number(message.since) || 0}` +
       `&goalClient=${encodeURIComponent(String(source.tab))}` +
       // Forward only the helper states this document may report; these are diagnostics.
       (['absent', 'empty', 'ok'].includes(message.fiber) ? `&fiber=${message.fiber}` : '');
     const result = await call(`/activity${query}`);
+    // A pageless verdict is lifted only by exact browser evidence after the activity await.
+    // Same-document SPA navigation can race this request without changing the document lease;
+    // currentConversationDocument also rejects Home/New Chat and pending navigation, so a stale
+    // poll cannot resurrect recovery for a conversation this tab no longer displays.
+    if (ownsDocument(source) && result.ok && result.data?.pagePresenceRequired === true &&
+        await currentConversationDocument(source, conversationId)) {
+      await call('/repairs/page-present', {
+        method: 'POST', body: JSON.stringify({ conversationId })
+      });
+    }
     if (ownsDocument(source) && result.ok && result.data && await acceptBrowserRevival(result.data.revival)) {
       await recoverDeferredRevivals();
     }

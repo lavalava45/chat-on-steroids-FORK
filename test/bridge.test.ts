@@ -1853,6 +1853,134 @@ describe('automatic compaction', () => {
     expect((await request('POST', '/repairs/claim', { body: { token: errorRepair.token } })).body.allowed).toBe(false);
   });
 
+  /**
+   * A repair nobody ever claims.
+   *
+   * Re-offering an unclaimed repair is right — a claim can be missed, and the page that missed it
+   * is the one that needs the reload — but it had no end. The give-up that existed reads what the
+   * page reports back, so a page that never returns reports nothing, no counter moves, and the
+   * ceiling cannot fire. Measured on 2026-09-20: one chat whose tab was gone took 388 offers in
+   * three and a half hours, one of them ever confirmed.
+   */
+  it('stops offering a repair the browser never claims, and says the chat has no page', async () => {
+    await pair();
+    const conversationId = randomUUID();
+    await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'user_message', time: Date.now(), text: 'Continue this task', messageId: 'never-claimed' },
+      { kind: 'turn_start', time: Date.now(), turnId: 'never-claimed-turn' },
+      { kind: 'chat_error', time: Date.now(), turnId: 'never-claimed-turn', recoverable: true,
+        text: 'Connection interrupted. Waiting for the complete answer' }
+    ] } });
+    await settled();
+
+    const offered = async (): Promise<boolean> => {
+      const status = await request('GET', '/status');
+      return (status.body.repairs as Array<{ conversationId: string }>)
+        .some(row => row.conversationId === conversationId);
+    };
+    expect(await offered(), 'no repair was offered at all').toBe(true);
+
+    // Never claimed, only re-read. Bounded well above the ceiling so the loop cannot be what
+    // passes: if the offers were still unbounded this would still be true on the last pass.
+    let seen = 1;
+    for (let pass = 0; pass < 40 && await offered(); pass++) seen += 1;
+
+    expect(seen, 'the repair was still being offered after forty reads').toBeLessThan(40);
+    expect(await offered(), 'it came back after being retired').toBe(false);
+
+    // The ceiling above bounds one repair, not the supply of them: the chat goes quiet, the sweep
+    // reads silence, and a fresh repair used to arrive with its own budget. Measured on 2026-09-21
+    // over seven hours after a tab was discarded — four `no page` verdicts, 106 reload attempts,
+    // 600 offers, all into an empty room. A new failure must not restart it.
+    await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'turn_start', time: Date.now(), turnId: 'never-claimed-again' },
+      { kind: 'chat_error', time: Date.now(), turnId: 'never-claimed-again', recoverable: true,
+        text: 'Connection interrupted. Waiting for the complete answer' }
+    ] } });
+    await settled();
+    expect(await offered(), 'a fresh failure handed the same page-less chat a new budget').toBe(false);
+
+    // Activity names alone are not enough because a stale SPA poll can outlive navigation. The
+    // bridge asks the extension for exact route proof, then that proof lifts the verdict.
+    expect((await request('GET', `/activity?conversationId=${conversationId}&since=0`)).body.pagePresenceRequired)
+      .toBe(true);
+    expect((await request('POST', '/repairs/page-present', { body: { conversationId } })).body)
+      .toMatchObject({ ok: true, cleared: true });
+    await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'chat_error', time: Date.now(), turnId: 'never-claimed-again', recoverable: true,
+        text: 'Connection interrupted. Waiting for the complete answer' }
+    ] } });
+    await settled();
+    expect(await offered(), 'a page that came back was still refused recovery').toBe(true);
+
+    const session = (await findSessionByConversation(conversationId))!;
+    const notes = (await readEvents(session.id, { kinds: ['note'] }))
+      .map(event => (event as { message: { text: string } }).message.text);
+    expect(notes.some(text => text.includes('has no page to reload')),
+      'the chat was dropped without saying why').toBe(true);
+  });
+
+  it('lets an explicit manual compaction retry a chat after automatic recovery declared it pageless', async () => {
+    await pair();
+    const conversationId = randomUUID();
+    await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'user_message', time: Date.now(), text: 'Continue this task', messageId: 'manual-after-pageless' },
+      { kind: 'turn_start', time: Date.now(), turnId: 'manual-after-pageless-turn' },
+      { kind: 'chat_error', time: Date.now(), turnId: 'manual-after-pageless-turn', recoverable: true,
+        text: 'Connection interrupted. Waiting for the complete answer' }
+    ] } });
+    await settled();
+
+    const offered = async (): Promise<boolean> => {
+      const status = await request('GET', '/status');
+      return (status.body.repairs as Array<{ conversationId: string }>)
+        .some(row => row.conversationId === conversationId);
+    };
+    expect(await offered()).toBe(true);
+    for (let pass = 0; pass < 40 && await offered(); pass++) { /* exhaust the no-listener budget */ }
+    expect(await offered()).toBe(false);
+
+    const session = (await findSessionByConversation(conversationId))!;
+    await compactSession(session.id);
+    const manual = (await request('GET', '/status')).body.repairs
+      .find((row: { conversationId: string }) => row.conversationId === conversationId);
+    expect(manual).toMatchObject({ reason: 'compaction', requiresClaim: true });
+  });
+
+  it('does not call a responsive page pageless while it explicitly defers the unclaimed repair', async () => {
+    await pair();
+    const conversationId = randomUUID();
+    await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'user_message', time: Date.now(), text: 'Continue this task', messageId: 'deferred-live-page' },
+      { kind: 'turn_start', time: Date.now(), turnId: 'deferred-live-page-turn' },
+      { kind: 'chat_error', time: Date.now(), turnId: 'deferred-live-page-turn', recoverable: true,
+        text: 'Connection interrupted. Waiting for the complete answer' }
+    ] } });
+    await settled();
+
+    const offered = async () => {
+      const status = await request('GET', '/status');
+      return (status.body.repairs as Array<{ conversationId: string; token: string }>)
+        .find(row => row.conversationId === conversationId) ?? null;
+    };
+
+    let repair = await offered();
+    expect(repair).not.toBeNull();
+    const token = repair!.token;
+
+    // Far beyond the no-listener ceiling: every defer is proof that a live page received the
+    // exact handout and chose not to claim it yet.
+    for (let pass = 0; pass < 20; pass++) {
+      expect((await request('POST', '/repairs/defer', { body: { token } })).body.ok).toBe(true);
+      repair = await offered();
+      expect(repair?.token).toBe(token);
+    }
+
+    // Once those live-page deferrals stop, the ordinary bounded no-listener verdict still works.
+    for (let pass = 0; pass < 40 && repair; pass++) repair = await offered();
+    expect(repair).toBeNull();
+  });
+
   it.each(['cancelled', 'replaced', 'dispatched'] as const)('opens a manual source immediately and revokes a %s ticket before browser action', async scenario => {
     await pair();
     const conversationId = randomUUID();

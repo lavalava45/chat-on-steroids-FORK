@@ -101,6 +101,7 @@ import {
   recordProgress,
   restoreRecordedConversation,
   setCallAttributionListener,
+  recordNote,
   type ChatObservation,
   type PageCallEvidence
 } from './session/recorder.js';
@@ -1600,6 +1601,9 @@ async function fileCompactionTicket(sessionId: string, id: string, automatic = f
 export async function compactSession(sessionId: string): Promise<SessionControlsView> {
   const { opened } = await fileCompactionTicket(sessionId, await controlledConversation(sessionId));
   if (opened.state === 'awaiting-summary') {
+    // A prior automatic recovery may have concluded that no page is listening. Manual Compact &
+    // Resume is a fresh user instruction, so it is allowed to make one new exact-page attempt.
+    pagelessChats.delete(opened.from);
     // The companion owns exact-tab discovery/opening even when Chrome is already
     // running. A cold process start alone cannot deliver a manual desktop request.
     queueBrowserRecovery(opened.from, sessionId,
@@ -2063,6 +2067,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return json(res, 200, { allowed }, origin);
   }
 
+  if (route === '/repairs/defer' && req.method === 'POST') {
+    let body: unknown;
+    try { body = await readBody(req); } catch { return json(res, 400, { error: 'bad_request' }, origin); }
+    const token = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>).token : null;
+    if (typeof token !== 'string' || token.length > 128) return json(res, 400, { error: 'bad_request' }, origin);
+    const deferred = deferRepairOffer(token);
+    return json(res, 200, { ok: deferred }, origin);
+  }
+
+  if (route === '/repairs/page-present' && req.method === 'POST') {
+    let body: unknown;
+    try { body = await readBody(req); } catch { return json(res, 400, { error: 'bad_request' }, origin); }
+    const id = body && typeof body === 'object' && !Array.isArray(body)
+      ? conversationId((body as Record<string, unknown>).conversationId) : null;
+    if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    return json(res, 200, { ok: true, cleared: pagelessChats.delete(id) }, origin);
+  }
+
   if (route === '/correlations' && req.method === 'POST') {
     let body: Record<string, unknown>;
     try {
@@ -2353,6 +2375,20 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const since = Number(url.searchParams.get('since') ?? 0);
     const goalClient = (url.searchParams.get('goalClient') ?? '').slice(0, 100);
     if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    // A stale same-document SPA poll can outlive navigation. While this chat is explicitly known
+    // pageless, do not let the poll itself run any of /activity's ordinary page-presence side
+    // effects (recorder reattach, recovery re-arm, etc.). Challenge the extension first; only an
+    // exact current-route proof clears the verdict, and the next ordinary poll does the work.
+    if (pagelessChats.has(id)) {
+      return json(res, 200, {
+        pagePresenceRequired: true,
+        sessionId: null,
+        entries: [],
+        stream: [],
+        userAnchors: [],
+        nextSince: Number.isFinite(since) ? Math.max(0, since) : 0
+      }, origin);
+    }
     noteFiberHealth(id, url.searchParams.get('fiber'));
     const retiredWorker = retiredWorkerForConversation(id);
     const superseded = await conversationWasSuperseded(id);
@@ -6272,6 +6308,16 @@ interface Repair {
   assistantSource?: { key: string; turnId: string | null; completed: boolean };
   attribution?: { incident: UnattributedIncident; candidate: UnattributedCandidate };
   claimed?: boolean;
+  /**
+   * How many times this exact repair has been offered to the browser.
+   *
+   * An unclaimed repair is re-offered on every sweep, which is right: a claim can be missed, and
+   * the page that missed it is the one that needs the reload. What was missing is an end.
+   * Measured on 2026-09-20 on one machine: a chat whose tab had been discarded took 388 offers
+   * between 12:46:54Z and 16:33:10Z, one of them ever confirmed, still going after three and a
+   * half hours. Other chats in the same log took 6, 3 and 2.
+   */
+  offers?: number;
   /** Stable local owner; the browser action is valid only while this session is still here. */
   sessionId: string;
   endedTurns: number;
@@ -6467,6 +6513,8 @@ function queueBrowserRecovery(
   // assistant-error, goal, compaction — so refusing here refuses all of them, and none of them
   // needs its own exemption.
   if (!sessionId || !workerRecoveryAllowed(conversationId) || isChatBlocked(conversationId) || stopRequestedFor(conversationId)) return false;
+  // Already answered: this chat has no page, and a fresh episode cannot change that.
+  if (pagelessChats.has(conversationId)) return false;
   // The turn's one error reload, already spent. Checked before the episode and state guards
   // below because it outlives both: those forget a repair the moment its episode changes, and
   // the whole point here is that a *new* error on the same broken turn buys nothing.
@@ -7805,6 +7853,44 @@ async function tickUnattributedIncident(): Promise<void> {
  * chats broken in the same instant into three reloads a minute apart, which is a queueing
  * artefact rather than anything this app decided.
  */
+/**
+ * How often one repair may be offered to a browser that never claims it.
+ *
+ * More generous than the silence budgets, because a missed claim is ordinary and the remedy is to
+ * offer again; this only ends the case where nothing is listening at all.
+ */
+const UNCLAIMED_REPAIR_OFFERS = 10;
+const unclaimedRepairTold = new Set<string>();
+/**
+ * Chats this app has concluded have no page, until one reports in again.
+ *
+ * The ceiling above bounds a single repair, not the supply of them: a chat whose tab is gone goes
+ * quiet, the sweep reads that as silence, queues a fresh repair, and the new one gets its own
+ * budget. Measured over the seven hours after a tab was discarded — four separate verdicts, 106
+ * reload attempts, 600 offers, all into an empty room.
+ *
+ * Lifted by the only thing that can disprove it: the page polling for its own chat's activity.
+ * Not a timer — nothing about elapsed time makes a discarded tab come back — and not durable,
+ * because a restart has no page to speak of either and should ask again.
+ */
+const pagelessChats = new Set<string>();
+
+/**
+ * A live page received this exact handout but says acting now would race native work.
+ *
+ * That is positive evidence a page exists, so it must reset only the "nobody is listening"
+ * budget. The repair itself, its token and its authority stay untouched; if the page later goes
+ * silent the same handout can still exhaust a fresh bounded offer budget and become pageless.
+ */
+function deferRepairOffer(token: string): boolean {
+  for (const [, repair] of repairsInFlight) {
+    if (repair.state !== 'handed' || repair.claimed || repair.token !== token || !repairNeedsClaim(repair)) continue;
+    repair.offers = 0;
+    return true;
+  }
+  return false;
+}
+
 async function takePendingRepairs(
   now = Date.now()
 ): Promise<Array<{ conversationId: string; token: string; reason: Repair['reason']; focus: boolean }>> {
@@ -7878,9 +7964,35 @@ async function takePendingRepairs(
     const unclaimed = repair.reason !== 'unattributed' && repairNeedsClaim(repair) && repair.state === 'handed' && !repair.claimed;
     if (repair.state !== 'queued' && !unclaimed) continue;
     if (now < repair.notBefore) continue;
-    if (!unclaimed) {
+    if (unclaimed) {
+      repair.offers = (repair.offers ?? 1) + 1;
+      if (repair.offers > UNCLAIMED_REPAIR_OFFERS) {
+        // Nothing is listening. Say that, rather than go on offering into an empty room — and say
+        // it as what it is, which is a verdict no reported failure can ever reach, because it
+        // needs a page to report the failure.
+        repairsInFlight.delete(conversationId);
+        pagelessChats.add(conversationId);
+        const key = `${repair.sessionId}:${repair.episode}`;
+        if (!unclaimedRepairTold.has(key)) {
+          unclaimedRepairTold.add(key);
+          if (unclaimedRepairTold.size > 500) {
+            for (const old of [...unclaimedRepairTold].slice(0, 100)) unclaimedRepairTold.delete(old);
+          }
+          void recordNote(
+            repair.sessionId,
+            `Stopped trying to recover this chat: ${repair.offers - 1} attempts were offered to the browser and ` +
+              'none was picked up, so this chat has no page to reload. Open its tab again and recovery resumes.'
+          ).catch(() => undefined);
+          logWarn(
+            `bridge: ${conversationId} never claimed ${repair.offers - 1} ${repair.reason} repair offer(s) — no page; not offering again`
+          );
+        }
+        continue;
+      }
+    } else {
       repair.state = 'handed';
       repair.token = randomBytes(9).toString('base64url');
+      repair.offers = 1;
       await updateRepairProgress(conversationId, repair, `Trying to reload chat to recover ${repairReason(repair)}…`);
     }
     // A missed pre-action claim may retry the same offer. Once claimed, ambiguous
