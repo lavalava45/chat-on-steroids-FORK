@@ -76,7 +76,13 @@ function build(slot, branch, commit) {
   const target = slotPaths(slot);
   fs.rmSync(target.output, { recursive: true, force: true });
   const relativeOutput = path.relative(root, target.output).replaceAll('\\', '/');
-  run(process.execPath, ['scripts/package.mjs', '--platform', 'win32', '--arch', 'x64', '--dir', '--output', relativeOutput]);
+  const noticesPath = path.join(root, 'THIRD-PARTY-NOTICES.txt');
+  const noticesBefore = fs.readFileSync(noticesPath);
+  try {
+    run(process.execPath, ['scripts/package.mjs', '--platform', 'win32', '--arch', 'x64', '--dir', '--output', relativeOutput]);
+  } finally {
+    fs.writeFileSync(noticesPath, noticesBefore);
+  }
   const validated = validate(slot, branch, commit);
   fs.writeFileSync(target.metadata, `${JSON.stringify({ slot, branch, commit, builtAt: new Date().toISOString() }, null, 2)}\n`);
   return validated;
