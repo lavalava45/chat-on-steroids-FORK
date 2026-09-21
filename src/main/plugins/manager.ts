@@ -90,9 +90,15 @@ export class PluginManager {
     this.root = path.join(userDataDir, 'plugins');
     this.closing = false;
     await fs.mkdir(this.root, { recursive: true });
-    const stored = await readDurable<RecordEntry[]>('plugins');
-    this.records = Array.isArray(stored) && stored.length <= 24
-      ? stored.filter(p => this.validRecord(p)).map(p => {
+    const stored = await readDurable<unknown>('plugins');
+    // Some older/local builds persisted the only installed plugin as the record itself rather than
+    // a one-element array. Treat only a fully valid record as that legacy shape; arbitrary objects
+    // still fail closed. Normalize it immediately so the next startup uses the canonical format.
+    const legacySingle = !Array.isArray(stored) && this.validRecord(stored as RecordEntry);
+    const storedRecords = Array.isArray(stored) ? stored : legacySingle ? [stored as RecordEntry] : [];
+    if (legacySingle) await writeDurableNow('plugins', storedRecords);
+    this.records = storedRecords.length <= 24
+      ? storedRecords.filter(p => this.validRecord(p)).map(p => {
         const { tools: _legacyTools, ...record } = p as RecordEntry & { tools?: unknown };
         const catalog = this.validCatalog(record.catalog);
         return { ...record, catalog, status: record.enabled ? 'connecting' : 'disabled' };
