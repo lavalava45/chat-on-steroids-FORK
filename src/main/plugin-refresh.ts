@@ -97,6 +97,31 @@ export function publishPluginSurface(surface: PluginSurface, connectorName: stri
 }
 export function unpublishPluginSurface(surface: PluginSurface): void { publications.delete(surface); }
 export function pluginRefreshPublications(): PluginPublication[] { return structuredClone([...publications.values()]); }
+/**
+ * Explicit user retry for one still-unclaimed refresh obligation.
+ *
+ * Ordinary browser polling and transport reconnects must never re-arm an operation:
+ * the user may have deliberately closed its helper tab. The Plugins UI Restart
+ * action is different — it is an explicit request to reconnect/discover that local
+ * plugin, so it may give the current, still-unclaimed declaration one fresh browser
+ * attempt. Ambiguous post-click attempts and durable manual states remain terminal
+ * until the declaration itself changes.
+ */
+export function rearmPluginRefresh(surface: PluginSurface): Promise<boolean> {
+  return serial(async () => {
+    const publication = publications.get(surface);
+    if (!publication) return false;
+    const current = await rows();
+    const row = current.find(candidate => candidate.surface === surface);
+    if (!row || row.schemaId !== publication.schemaId || row.completedSchemaId === row.schemaId || row.attempted || row.manual) return false;
+    row.id = randomUUID();
+    delete row.error;
+    await writeDurableNow('plugin-refresh', current);
+    logInfo(`plugin refresh rearmed by explicit restart surface=${surface} schema=${row.schemaId.slice(0, 12)}`);
+    wakeBrowserWork();
+    return true;
+  });
+}
 /** App IDs are stable connector identities. The browser must prove current installation. */
 export function pendingPluginRefreshes(): Promise<PluginRefreshRequest[]> {
   return serial(async () => {
