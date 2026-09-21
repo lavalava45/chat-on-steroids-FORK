@@ -42,6 +42,26 @@ function readState() {
   }
 }
 
+function runningCosExecutables() {
+  if (process.platform !== 'win32') return [];
+  const script = [
+    "$ErrorActionPreference='SilentlyContinue'",
+    "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'Chat On Steroids.exe' } | ForEach-Object { $_.ExecutablePath }"
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8', windowsHide: true });
+  if (result.status !== 0) return [];
+  return [...new Set(result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
+}
+
+function runningLocalSlot() {
+  const executables = runningCosExecutables().map((value) => path.normalize(value).toLowerCase());
+  for (const slot of ['slot-a', 'slot-b']) {
+    const exe = path.normalize(slotPaths(slot).exe).toLowerCase();
+    if (executables.includes(exe)) return slot;
+  }
+  return null;
+}
+
 function other(slot) {
   return slot === 'slot-a' ? 'slot-b' : 'slot-a';
 }
@@ -109,7 +129,9 @@ function armHandoff(target, slot, branch, commit) {
   console.log(`Target: ${target.exe}`);
 }
 
-const state = readState();
+const recordedState = readState();
+const detectedSlot = runningLocalSlot();
+const state = detectedSlot ? { ...(recordedState ?? {}), active: detectedSlot } : recordedState;
 const branch = git(['branch', '--show-current']);
 const commit = git(['rev-parse', '--short=7', 'HEAD']);
 
@@ -130,4 +152,13 @@ console.log(`Identity: ${branch} @ ${commit}`);
 const target = build(targetSlot, branch, commit);
 console.log(`Validated: ${target.exe}`);
 
-if (action === 'swap') armHandoff(target, targetSlot, branch, commit);
+if (action === 'swap') {
+  const running = runningCosExecutables();
+  if (!detectedSlot && running.length > 0) {
+    console.log('First activation required: the currently running COS predates the local restart protocol.');
+    console.log('Quit that build once via tray -> Quit, then launch the validated target above.');
+    console.log('After that, fork:swap will detect the active slot automatically and future swaps are fully automatic.');
+  } else {
+    armHandoff(target, targetSlot, branch, commit);
+  }
+}
