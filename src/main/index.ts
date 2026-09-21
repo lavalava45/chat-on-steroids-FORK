@@ -64,7 +64,7 @@ import {
   type ContinuationSnapshot
 } from './session/continuation.js';
 import { runShutdownSequence } from './shutdown.js';
-import { buildWindowTitle } from './build-identity.js';
+import { buildWindowTitle } from '../shared/build-identity.js';
 import { forkRestartRequested } from './fork-restart.js';
 import { applyStagedUpdate, startUpdateChecks } from './update.js';
 import { UI_BASE_ZOOM, windowLayoutForWorkArea, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
@@ -285,7 +285,7 @@ function refreshTray(): void {
   const running = connected || offline;
   const label = connected ? 'Connected' : offline ? 'No internet' : 'Not connected';
   tray.setImage(trayIcon(running));
-  tray.setToolTip(`Chat On Steroids — ${label.toLowerCase()}`);
+  tray.setToolTip(`${buildWindowTitle()} — ${label.toLowerCase()}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label, enabled: false },
