@@ -143,6 +143,12 @@ function createWindow(): void {
     }
   });
 
+  const fixedWindowTitle = buildWindowTitle();
+  window.webContents.on('page-title-updated', (event) => {
+    event.preventDefault();
+    window?.setTitle(fixedWindowTitle);
+  });
+
   if (process.platform === 'win32') window.removeMenu();
 
   // First use discovers the account once. A restored catalog is immediately usable;
