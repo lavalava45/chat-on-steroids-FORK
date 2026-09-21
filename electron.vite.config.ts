@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 function gitValue(args: string[], fallback: string): string {
@@ -12,16 +13,20 @@ function gitValue(args: string[], fallback: string): string {
 
 const buildBranch = process.env.GITHUB_REF_NAME || gitValue(['branch', '--show-current'], 'unknown');
 const buildCommit = process.env.GITHUB_SHA?.slice(0, 7) || gitValue(['rev-parse', '--short=7', 'HEAD'], 'unknown');
+const appVersion = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')).version as string;
+
+const buildIdentityDefine = {
+  __COS_BUILD_BRANCH__: JSON.stringify(buildBranch),
+  __COS_BUILD_COMMIT__: JSON.stringify(buildCommit),
+  __COS_APP_VERSION__: JSON.stringify(appVersion)
+};
 
 export default defineConfig({
   main: {
     // Keep node_modules external so the MCP SDK ships as real files in the asar
     // rather than being inlined by the bundler.
     plugins: [externalizeDepsPlugin()],
-    define: {
-      __COS_BUILD_BRANCH__: JSON.stringify(buildBranch),
-      __COS_BUILD_COMMIT__: JSON.stringify(buildCommit)
-    },
+    define: buildIdentityDefine,
     build: {
       rollupOptions: { input: resolve(__dirname, 'src/main/index.ts') }
     }
@@ -34,6 +39,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    define: buildIdentityDefine,
     build: {
       rollupOptions: { input: resolve(__dirname, 'src/renderer/index.html') }
     }

@@ -10,6 +10,7 @@ import { initAppearance } from './appearance.js';
 import { initPet } from './pet.js';
 import type { AppearanceSettings } from '../shared/appearance.js';
 import type { BrowserBridgePort } from '../shared/browser-bridge.js';
+import { buildCompactIdentity } from '../shared/build-identity.js';
 /**
  * Renderer. No Node, no filesystem, no network — everything goes through window.api.
  *
@@ -53,6 +54,7 @@ initPet();
 initSetupGuide();
 // Escape the translucent sidebar's backdrop-filter containing block.
 document.body.append($('connectionPopover'));
+$('buildIdentity').textContent = buildCompactIdentity();
 const connectionAdvanced = initConnectionAdvanced();
 const appearance = initAppearance(patch => { void save(patch); });
 
