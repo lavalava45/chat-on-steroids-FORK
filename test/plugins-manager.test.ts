@@ -909,4 +909,28 @@ describe('enabled plugin process ownership', () => {
     expect(await h.pids()).toHaveLength(2);
     expect(alive((await h.pids())[1]!.pid)).toBe(true);
   });
+
+  it('rebases a cloned profile plugin directory before validating the stored record', async () => {
+    await manager.install({ name: 'Cloned integration', source: { kind: 'command', command: process.execPath, args: [entry] } });
+    await manager.close();
+    const sourceState = path.join(dir, 'state', 'plugins.json');
+    const stored = JSON.parse(await fs.readFile(sourceState, 'utf8'));
+    const oldDirectory = stored[0].directory as string;
+    const clone = path.join(dir, 'cloned-profile');
+    const clonedDirectory = path.join(clone, 'plugins', stored[0].id, path.basename(oldDirectory));
+    await fs.mkdir(path.dirname(clonedDirectory), { recursive: true });
+    await fs.cp(oldDirectory, clonedDirectory, { recursive: true });
+    await fs.mkdir(path.join(clone, 'state'), { recursive: true });
+    await fs.writeFile(path.join(clone, 'state', 'plugins.json'), JSON.stringify(stored));
+
+    initDurableStore(clone);
+    manager = new PluginManager();
+    await manager.initialize(clone);
+
+    expect(manager.snapshot().plugins).toHaveLength(1);
+    expect(manager.snapshot().plugins[0]!.name).toBe('Cloned integration');
+    const normalized = JSON.parse(await fs.readFile(path.join(clone, 'state', 'plugins.json'), 'utf8'));
+    expect(Array.isArray(normalized)).toBe(true);
+    expect(normalized[0].directory).toBe(clonedDirectory);
+  });
 });

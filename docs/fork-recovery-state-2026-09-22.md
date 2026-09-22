@@ -246,3 +246,11 @@ Validation completed before slot activation:
 Slot A was built only, not launched or swapped in. During packaging the live primary process remained the author installation at `%LOCALAPPDATA%\Programs\Chat On Steroids\Chat On Steroids.exe`, and `%APPDATA%\chat-on-steroids-FORK-slot-a\config.json` retained its original length/timestamp, proving the build did not touch the slot profile.
 
 The local `our-release` branch is the rebuilt stack. The previous `our-release @ 4f20b2f` is preserved as `backup/our-release-pre-93573d8-4f20b2f`. Do not treat stale `release-local/current.json` alone as proof that a slot is running; runtime ownership is determined from the actual executable path of the live COS process.
+
+## Cloned plugin directory rebasing
+
+The first live slot-A activation exposed one additional profile-clone requirement: `state\plugins.json` stores each installation generation as an absolute `directory`. A byte-for-byte profile clone therefore retained the author-profile path even though the same plugin generation had been copied into the slot profile. The new runtime correctly rejected that record because it was outside the active slot's plugin root.
+
+Slot A was repaired in-place by changing only that `directory` to the matching generation under `%APPDATA%\chat-on-steroids-FORK-slot-a\plugins`; the JSON array shape must be preserved. The plugin then became visible after restart.
+
+Fork patch `profile-plugin-rebase` now makes this clone operation self-healing: before plugin-record validation, an old absolute generation path is rebased only when it has the standard `<plugins>/<plugin-id>/<generation>` shape and that exact generation already exists below the active fork profile. The normalized array is then persisted. This protects slot B and future resets/clones from repeating the slot-A failure.

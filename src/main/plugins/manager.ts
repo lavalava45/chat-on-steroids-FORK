@@ -86,13 +86,46 @@ export class PluginManager {
     this.exposureCache = null;
     await writeDurableNow('plugins', this.records);
   }
+  private async rebaseClonedDirectory(value: unknown): Promise<{ value: unknown; changed: boolean }> {
+    if (!value || typeof value !== 'object') return { value, changed: false };
+    const row = value as Partial<RecordEntry>;
+    if (typeof row.id !== 'string' || !/^[a-f0-9-]{36}$/.test(row.id) || typeof row.directory !== 'string')
+      return { value, changed: false };
+
+    const current = path.resolve(row.directory);
+    const ownedRoot = path.resolve(this.root, row.id) + path.sep;
+    if (current.toLowerCase().startsWith(ownedRoot.toLowerCase())) {
+      // Keep an already-owned path unchanged; validRecord() remains the authority for the record.
+      return { value, changed: false };
+    }
+
+    // A full profile clone copies plugin generations but preserves the old profile's absolute
+    // directory in durable state. Rebase only the standard <plugins>/<id>/<generation> shape and
+    // only when that exact generation already exists under the current userData root.
+    if (path.basename(path.dirname(current)).toLowerCase() !== row.id.toLowerCase())
+      return { value, changed: false };
+    const generation = path.basename(current);
+    if (!generation || generation === '.' || generation === path.sep) return { value, changed: false };
+    const candidate = path.join(this.root, row.id, generation);
+    try {
+      if (!(await fs.stat(candidate)).isDirectory()) return { value, changed: false };
+    } catch {
+      return { value, changed: false };
+    }
+    return { value: { ...(value as Record<string, unknown>), directory: candidate }, changed: true };
+  }
   async initialize(userDataDir: string): Promise<void> {
     this.root = path.join(userDataDir, 'plugins');
     this.closing = false;
     await fs.mkdir(this.root, { recursive: true });
-    const stored = await readDurable<RecordEntry[]>('plugins');
-    this.records = Array.isArray(stored) && stored.length <= 24
-      ? stored.filter(p => this.validRecord(p)).map(p => {
+    const stored = await readDurable<unknown>('plugins');
+    const normalized = Array.isArray(stored) && stored.length <= 24
+      ? await Promise.all(stored.map(value => this.rebaseClonedDirectory(value)))
+      : [];
+    if (normalized.some(row => row.changed))
+      await writeDurableNow('plugins', normalized.map(row => row.value));
+    this.records = normalized.length
+      ? normalized.map(row => row.value as RecordEntry).filter(p => this.validRecord(p)).map(p => {
         const { tools: _legacyTools, ...record } = p as RecordEntry & { tools?: unknown };
         const catalog = this.validCatalog(record.catalog);
         return { ...record, catalog, status: record.enabled ? 'connecting' : 'disabled' };

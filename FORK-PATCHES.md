@@ -21,6 +21,7 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 2 | `runtime-release` | permanent | Visible fork/build identity plus graceful restart and slot-isolated A/B build/swap/rollback (`...-slot-a` / `...-slot-b`). |
 | 3 | `patch-stack-tooling` | permanent | Reproducible release-baseline replay, focused validation, status reporting, and this manifest. |
 | 4 | `no-auto-debugger-lease` | permanent | Disable automatic Chrome debugger rendering leases; explicit browser tools still attach on demand. |
+| 5 | `profile-plugin-rebase` | permanent | Rebase cloned plugin generation directories into the active fork profile before plugin-record validation. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 
