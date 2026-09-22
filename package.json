@@ -47,6 +47,10 @@
     "fork:build": "node scripts/local-release.mjs build",
     "fork:swap": "node scripts/local-release.mjs swap",
     "fork:rollback": "node scripts/local-release.mjs rollback",
+    "fork:sync-upstream": "node scripts/fork-stack.mjs sync",
+    "fork:stack:status": "node scripts/fork-stack.mjs status",
+    "fork:stack:verify": "node scripts/fork-stack.mjs verify",
+    "fork:stack:abort-sync": "node scripts/fork-stack.mjs abort-sync",
     "test:kill": "node scripts/kill-stray-vitest.mjs"
   },
   "dependencies": {
