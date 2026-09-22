@@ -89,17 +89,20 @@ var CLF_DOM = (() => {
       if (!box || !host) return false;
       const appId = connectorId.slice('plugin_'.length);
       const wanted = normalizeConnectorLabel(connectorName);
-      const nodes = [...host.querySelectorAll(
-        '[data-app-id],[data-plugin-id],[data-mention-id],[data-testid*="mention" i],[contenteditable="false"],button,[role="button"]'
-      )].filter(node => node !== box && !node.closest(OWN_SURFACES));
+      const inline = [...box.querySelectorAll(
+        '[data-app-id],[data-plugin-id],[data-mention-id],[data-testid*="mention" i],[contenteditable="false"]'
+      )];
+      const external = [...host.querySelectorAll(
+        '[data-app-id],[data-plugin-id],[data-mention-id],[data-testid*="mention" i]'
+      )].filter(node => !box.contains(node));
+      const nodes = [...new Set([...inline, ...external])].filter(node => node !== box && !node.closest(OWN_SURFACES));
       return nodes.some(node => {
         const label = normalizeConnectorLabel(node.textContent).replace(/^@\s*/, '');
         if (label !== wanted) return false;
         const attributes = [...node.attributes].map(attribute => `${attribute.name}=${attribute.value}`).join(' ');
         const exactId = attributes.includes(connectorId) || attributes.includes(appId);
-        const tokenShape = node.getAttribute('contenteditable') === 'false' ||
-          node.hasAttribute('data-mention-id') || /mention/i.test(node.getAttribute('data-testid') || '') ||
-          node.matches('button,[role="button"]');
+        const tokenShape = box.contains(node) && (node.getAttribute('contenteditable') === 'false' ||
+          node.hasAttribute('data-mention-id') || /mention/i.test(node.getAttribute('data-testid') || ''));
         return exactId || tokenShape;
       });
     }, false);
