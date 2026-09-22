@@ -811,12 +811,17 @@
       (acceptedIdentity || matchesSubmittedUser(message, receipt.text));
   }
 
-  function rememberUserSend() {
+  function rememberUserSend(remindConnectors = false) {
     // Only the explicitly selected offline Goal backend changes the user prompt.
     const composer = CLF_DOM.composer();
     if (goalConfig?.backend === 'templates' && (goalConfig?.enabled === true || (!goalConfig?.own && !!goalConfig?.objective)) && goalConfig?.mode !== 'loop' && !desktopDecision) {
       const raw = composer?.innerText || composer?.textContent || '';
       if (raw.trim() && !raw.includes(GOAL_MARKER_INSTRUCTION.trim())) CLF_DOM.insertPrompt(raw + GOAL_MARKER_INSTRUCTION, true);
+    }
+    if (remindConnectors && !desktopDecision && !commandAttempt && connectorPresence.length) {
+      const current = CLF_DOM.composer()?.textContent || '';
+      const framed = CLF_DOM.withConnectorPresence(current, connectorPresence);
+      if (framed !== current) CLF_DOM.insertPrompt(framed, true);
     }
     const text = sendText(CLF_DOM.composer()?.textContent);
     const attachmentNames = CLF_DOM.composerAttachmentNames();
@@ -840,12 +845,12 @@
   }
   document.addEventListener('click', (event) => {
     const button = CLF_DOM.sendButton?.();
-    if (button && event.target && button.contains(event.target)) rememberUserSend();
+    if (button && event.target && button.contains(event.target)) rememberUserSend(event.isTrusted === true);
   }, true);
   document.addEventListener('submit', (event) => {
     const composer = CLF_DOM.composer();
     if (composer && event.target && typeof event.target.contains === 'function' && event.target.contains(composer)) {
-      rememberUserSend();
+      rememberUserSend(event.isTrusted === true);
     }
   }, true);
   document.addEventListener('keydown', (event) => {
@@ -857,7 +862,7 @@
       event.key === 'Enter' &&
       !event.shiftKey &&
       !event.isComposing
-    ) rememberUserSend();
+    ) rememberUserSend(event.isTrusted === true);
   }, true);
 
   /**
@@ -871,6 +876,7 @@
    */
   let tokens = 0;
   let context = null;
+  let connectorPresence = [];
   /**
    * The app's answer to "may this chat compact itself right now?", refreshed every poll.
    *
@@ -6313,6 +6319,13 @@
       }
       tokens = Number.isFinite(Number(data.tokens)) ? Number(data.tokens) : 0;
       context = readContext(data.context);
+      connectorPresence = Array.isArray(data.connectorPresence) ? data.connectorPresence.flatMap(row => {
+        if (!row || typeof row !== 'object') return [];
+        const connectorName = typeof row.connectorName === 'string' ? row.connectorName.slice(0, 100) : '';
+        const connectorId = typeof row.connectorId === 'string' && /^plugin_asdk_app_[a-zA-Z0-9_-]{1,160}$/.test(row.connectorId)
+          ? row.connectorId : '';
+        return connectorName && connectorId ? [{ connectorName, connectorId }] : [];
+      }).slice(0, 3) : [];
       // The goal loop's settings and, while one is running, the draft itself: its stage, the
       // text OpenRouter has streamed so far, and — once it is `ready` — the message to type.
       // Nothing is typed here; maybeSendGoalReply below owns that, after the pull has
