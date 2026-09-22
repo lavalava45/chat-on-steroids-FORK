@@ -3,6 +3,26 @@ import { JSDOM } from 'jsdom';
 import { expect, it } from 'vitest';
 import { prependUserPrompt, userPromptText } from '../src/shared/user-prompt.js';
 
+it('reasserts a proven connector id on every manual turn without changing the visible authored text', () => {
+  const page = new JSDOM('', { runScripts: 'outside-only' });
+  try {
+    page.window.eval(readFileSync('extension/chatgpt-dom.js', 'utf8'));
+    const api = (page.window as any).CLF_DOM;
+    const connectors = [{ connectorName: 'Chat On Steroids Core', connectorId: 'plugin_asdk_app_example' }];
+
+    for (let turn = 1; turn <= 4; turn++) {
+      const authored = `turn ${turn}: continue the same task`;
+      const sent = api.withConnectorPresence(authored, connectors);
+      expect(sent).toContain('Chat On Steroids Core (connector id: plugin_asdk_app_example)');
+      expect(api.userPromptText(sent)).toBe(authored);
+      // A second send-boundary observer for the same native submission must be idempotent.
+      expect(api.withConnectorPresence(sent, connectors)).toBe(sent);
+    }
+
+    expect(api.withConnectorPresence('plain', [{ connectorName: 'bad', connectorId: 'not-an-app-id' }])).toBe('plain');
+  } finally { page.window.close(); }
+});
+
 it('preserves the entire Unicode prompt and literal boundary-like user text across both readers', () => {
   const page = new JSDOM('', { runScripts: 'outside-only' });
   try {
