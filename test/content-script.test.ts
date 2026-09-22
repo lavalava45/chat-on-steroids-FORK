@@ -14352,6 +14352,78 @@ describe('the fresh chat the app opened', () => {
  * filled against a figure of its own would show a full bar and do nothing, or compact a
  * conversation that still looked half empty.
  */
+describe('per-message Core attachment', () => {
+  const activity = {
+    ok: true,
+    data: {
+      entries: [], stream: [], userAnchors: [], nextSince: 0, pendingTools: 0, job: null,
+      tokens: 0, context: null,
+      connectorPresence: [{ surface: 'core', connectorName: 'Chat On Steroids Core', connectorId: 'plugin_asdk_app_example' }]
+    }
+  };
+
+  it('intercepts a trusted follow-up once, verifies native Core selection, then spends one Send click', async () => {
+    let sends = 0;
+    live = await harness(undefined, { activity: () => activity }, document => {
+      document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => { sends++; });
+    });
+    await live.hook.pullActivity();
+    const api = (live.window as any).CLF_DOM;
+    let selected = false, selects = 0;
+    api.connectorMentionSelected = () => selected;
+    api.selectConnectorMention = async () => { selects++; selected = true; return true; };
+    live.document.querySelector('#prompt-textarea')!.textContent = 'continue using Core on this task';
+
+    live.trustedClick(live.document.querySelector('[data-testid="send-button"]')!);
+    await settle(100);
+
+    expect(selects).toBe(1);
+    expect(sends).toBe(1);
+    expect(live.document.querySelector('.clf-connector-warning')).toBeNull();
+  });
+
+  it('fails closed when native Core selection cannot be proved and preserves the draft', async () => {
+    let sends = 0;
+    live = await harness(undefined, { activity: () => activity }, document => {
+      document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => { sends++; });
+    });
+    await live.hook.pullActivity();
+    const api = (live.window as any).CLF_DOM;
+    api.connectorMentionSelected = () => false;
+    api.selectConnectorMention = async () => false;
+    const composer = live.document.querySelector('#prompt-textarea')!;
+    composer.textContent = 'do not lose this draft';
+
+    live.trustedClick(live.document.querySelector('[data-testid="send-button"]')!);
+    await settle(100);
+
+    expect(sends).toBe(0);
+    expect(composer.textContent).toBe('do not lose this draft');
+    expect(live.document.querySelector('.clf-connector-warning')?.textContent).toContain('draft was not sent');
+  });
+
+  it('does not auto-attach Plugins or Desktop when Core is absent', async () => {
+    const nonCore = {
+      ...activity,
+      data: {
+        ...activity.data,
+        connectorPresence: [{ surface: 'plugins', connectorName: 'Chat On Steroids Plugins', connectorId: 'plugin_asdk_app_plugins' }]
+      }
+    };
+    live = await harness(undefined, { activity: () => nonCore });
+    await live.hook.pullActivity();
+    const api = (live.window as any).CLF_DOM;
+    const select = vi.fn(async () => true);
+    api.selectConnectorMention = select;
+    live.document.querySelector('#prompt-textarea')!.textContent = 'ordinary follow-up';
+
+    live.trustedClick(live.document.querySelector('[data-testid="send-button"]')!);
+    await settle();
+
+    expect(select).not.toHaveBeenCalled();
+  });
+});
+
 describe('the context meter and automatic compaction', () => {
   let live: Harness | null = null;
 
