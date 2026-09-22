@@ -196,9 +196,17 @@ var CLF_DOM = (() => {
       if (!document.execCommand('insertText', false, `${prefix}@${connectorName}`)) return false;
       if (!stillCurrent() || composer() !== box) { rollback(); return false; }
 
-      const option = await waitForConnector(() => connectorMentionOption(connectorName, connectorId), 2500);
-      if (!option || !stillCurrent() || composer() !== box) { rollback(); return false; }
-      option.click();
+      // Current ChatGPT can consume an exact full @app name immediately and replace it
+      // with the structured inline plugin pill without leaving a suggestion menu mounted.
+      // Race the two legitimate native outcomes instead of requiring the older menu path.
+      const outcome = await waitForConnector(() => {
+        if (connectorMentionSelected(connectorName, connectorId)) return { selected: true };
+        const option = connectorMentionOption(connectorName, connectorId);
+        return option ? { option } : null;
+      }, 2500);
+      if (!outcome || !stillCurrent() || composer() !== box) { rollback(); return false; }
+      if (outcome.selected === true) return true;
+      outcome.option.click();
 
       const selected = await waitForConnector(
         () => connectorMentionSelected(connectorName, connectorId) ? true : null,

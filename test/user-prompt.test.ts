@@ -92,6 +92,39 @@ it('uses the native mention UI and returns true only after a structured token ap
   } finally { page.window.close(); }
 });
 
+it('accepts ChatGPT direct structured tokenization when an exact app mention mounts no menu', async () => {
+  const page = new JSDOM('<form id="form"><div id="prompt-textarea" contenteditable="true">continue task</div></form>', { url: 'https://chatgpt.com/c/example', runScripts: 'outside-only', pretendToBeVisual: true });
+  try {
+    const { document } = page.window;
+    const box = document.getElementById('prompt-textarea')!;
+    Object.defineProperty(box, 'getClientRects', { value: () => [{ width: 400, height: 60 }] });
+    (document as any).execCommand = (command: string, _ui?: boolean, _value?: string) => {
+      if (command === 'insertText') {
+        const pill = document.createElement('span');
+        pill.textContent = 'Chat On Steroids Core';
+        pill.setAttribute('contenteditable', 'false');
+        pill.setAttribute('data-id', 'plugin:asdk_app_example');
+        pill.setAttribute('data-symbol', 'ecosystemMention');
+        box.append(pill);
+        return true;
+      }
+      if (command === 'undo') return true;
+      return false;
+    };
+    page.window.eval(readFileSync('extension/chatgpt-dom.js', 'utf8'));
+    const api = (page.window as any).CLF_DOM;
+    box.focus();
+
+    expect(await api.selectConnectorMention(
+      'Chat On Steroids Core',
+      'plugin_asdk_app_example',
+      () => true
+    )).toBe(true);
+    expect(api.connectorMentionSelected('Chat On Steroids Core', 'plugin_asdk_app_example')).toBe(true);
+    expect(document.querySelector('[role="listbox"],[role="menu"]')).toBeNull();
+  } finally { page.window.close(); }
+});
+
 
 it('preserves the entire Unicode prompt and literal boundary-like user text across both readers', () => {
   const page = new JSDOM('', { runScripts: 'outside-only' });
