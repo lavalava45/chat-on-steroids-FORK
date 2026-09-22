@@ -1,5 +1,14 @@
 /** Lightweight rendering leases. The bridge/operation owns activity, never this module. */
-export function createActiveTabs(chrome) {
+export function createActiveTabs(chrome, { enabled = true } = {}) {
+  if (!enabled) {
+    return {
+      set() { return Promise.resolve(); },
+      owns() { return false; },
+      revoke() { return Promise.resolve(); },
+      navigation() { return Promise.resolve(); },
+      detached() { return Promise.resolve(); }
+    };
+  }
   const KEY = 'cosActiveTabs';
   const scopes = new Map(), states = new Map(), retiring = new Set(), cancelled = new Map();
   let syncing = null, again = false;

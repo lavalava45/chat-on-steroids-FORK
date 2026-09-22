@@ -20,6 +20,7 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 1 | `profile-isolation` | permanent | Keep this fork's stable Electron/profile/plugin state on `%APPDATA%\chat-on-steroids-FORK`, never the author's `%APPDATA%\chat-on-steroids`. |
 | 2 | `runtime-release` | permanent | Visible fork/build identity plus graceful restart and slot-isolated A/B build/swap/rollback (`...-slot-a` / `...-slot-b`). |
 | 3 | `patch-stack-tooling` | permanent | Reproducible release-baseline replay, focused validation, status reporting, and this manifest. |
+| 4 | `no-auto-debugger-lease` | permanent | Disable automatic Chrome debugger rendering leases; explicit browser tools still attach on demand. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 

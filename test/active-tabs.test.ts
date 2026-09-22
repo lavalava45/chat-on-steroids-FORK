@@ -25,10 +25,23 @@ function setup(stored: unknown[] = []) {
     }
   };
   const make = () => vm.runInNewContext(`${source}; createActiveTabs(chrome)`, { chrome });
-  return { chrome, data, tabs, attached, make, control: make() };
+  const makeDisabled = () => vm.runInNewContext(`${source}; createActiveTabs(chrome, { enabled: false })`, { chrome });
+  return { chrome, data, tabs, attached, make, makeDisabled, control: make() };
 }
 
 describe('active ChatGPT rendering leases', () => {
+  it('can be disabled without touching Chrome debugger ownership', async () => {
+    const { makeDisabled, chrome, attached } = setup();
+    const control = makeDisabled();
+    await control.set('policy', [A, B]);
+    expect(chrome.debugger.attach).not.toHaveBeenCalled();
+    expect(chrome.debugger.sendCommand).not.toHaveBeenCalled();
+    expect([...attached]).toEqual([]);
+    expect(control.owns(1)).toBe(false);
+    await control.navigation(1);
+    await control.revoke();
+  });
+
   it('protects only requested active pages, releases idle pages, and never changes browser focus', async () => {
     const { control, chrome, attached } = setup();
     await control.set('policy', [A]);

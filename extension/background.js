@@ -23,7 +23,10 @@
 import { createBrowserControl } from './browser-control.js';
 import { createActiveTabs } from './active-tabs.js';
 
-const activeTabs = globalThis.chrome?.debugger ? createActiveTabs(chrome) : null;
+// Fork policy: never attach Chrome's debugger merely to keep ChatGPT rendering in
+// the background. Explicit browser_* tools retain their own separate debugger
+// ownership in browser-control.js and continue to work on demand.
+const activeTabs = globalThis.chrome?.debugger ? createActiveTabs(chrome, { enabled: false }) : null;
 
 const PORTS = [8765, 8766, 8767, 8768, 8769];
 const HELLO_TIMEOUT_MS = 1200;
