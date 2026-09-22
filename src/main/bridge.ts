@@ -11,7 +11,7 @@ import { supportsFinishAutomation } from '../shared/finish.js';
 import { injectedUserMessage, recordedRequestTurn, responseTurnId } from '../shared/chronology.js';
 import type { SessionSummary } from '../shared/session.js';
 import { publishBrowserDecision, authorizeBrowserInput, sessionInputPolicy, collectRecordedBrowserDecision, type InputActivity } from './session/input.js';
-import { pluginRefreshPublications, pendingPluginRefreshes, claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh } from './plugin-refresh.js';
+import { pluginRefreshPublications, pluginConnectorPresence, pendingPluginRefreshes, claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh } from './plugin-refresh.js';
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 import { wakeBrowserUrl } from './browser-startup.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
@@ -2511,6 +2511,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         logWarn(`bridge: resume-shadow repair for ${id} failed — ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    const connectorPresence = await pluginConnectorPresence();
     const summary = await getSession(live.sessionId);
     const activityExpiry = summary ? sessionActivityExpiresAt(summary) : undefined;
     const hasActivityDeadline = activityExpiry !== undefined;
@@ -2709,6 +2710,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       200,
       {
         sessionId: live.sessionId,
+        connectorPresence,
         generating: hasActivityDeadline ? activityCurrent && live.generating : live.generating,
         // What the *currently attached* chat is carrying, not what the local session has
         // accumulated over its whole life. A session that has been compacted keeps its
