@@ -73,6 +73,22 @@ var CLF_DOM = (() => {
     const boundary = '\n[[/COS_CONTEXT]]\n\n';
     return value.startsWith(boundary, end) ? identity + value.slice(end + boundary.length) : null;
   }
+  function withConnectorPresence(value, connectors) {
+    if (typeof value !== 'string' || userPromptText(value) !== null || !Array.isArray(connectors) || !connectors.length) return value;
+    const rows = connectors.flatMap(row => {
+      if (!row || typeof row !== 'object') return [];
+      const name = typeof row.connectorName === 'string' ? row.connectorName.trim().slice(0, 100) : '';
+      const id = typeof row.connectorId === 'string' && /^plugin_asdk_app_[a-zA-Z0-9_-]{1,160}$/.test(row.connectorId) ? row.connectorId : '';
+      return name && id ? [`- ${name} (connector id: ${id})`] : [];
+    });
+    if (!rows.length) return value;
+    const instructions =
+      'Connector availability for this turn: the following Chat On Steroids connectors are still connected and available. ' +
+      'Do not conclude that one is unavailable merely because it was not surfaced in the immediately preceding turn; use its exact connector id when relevant.\n' +
+      rows.join('\n');
+    return `[[COS_CONTEXT:${instructions.length}]]\n${instructions}\n[[/COS_CONTEXT]]\n\n${value}`;
+  }
+
   function presentUserPrompts(readUserText) {
     return safe(() => {
       for (const raw of document.querySelectorAll(`[data-message-author-role="user"] :is(.whitespace-pre-wrap, .markdown):not([data-clf-user-text]), ${SHELL_TURN} [data-content-search-unit-key$=":user"] [data-user-message-bubble] .whitespace-pre-wrap:not([data-clf-user-text])`)) {
@@ -2535,6 +2551,7 @@ var CLF_DOM = (() => {
     turnIdOf,
     messageIdOf,
     userPromptText,
+    withConnectorPresence,
     userMessageReaction,
     presentUserPrompts,
     composerVisible,
