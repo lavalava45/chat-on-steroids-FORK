@@ -97,6 +97,32 @@ export function publishPluginSurface(surface: PluginSurface, connectorName: stri
 }
 export function unpublishPluginSurface(surface: PluginSurface): void { publications.delete(surface); }
 export function pluginRefreshPublications(): PluginPublication[] { return structuredClone([...publications.values()]); }
+export interface PluginConnectorPresence {
+  surface: PluginSurface;
+  connectorName: string;
+  /** Exact ChatGPT plugin reference, suitable for model/tool routing hints. */
+  connectorId: string;
+}
+
+/**
+ * Installed connector identities that ChatGPT has already proven for the current surfaces.
+ *
+ * This is deliberately metadata-only: callers can remind an existing conversation that a
+ * connector is available without forcing a tools/list refresh or duplicating its schemas.
+ * appId is learned only from ChatGPT's own installed-connector page and retained across
+ * schema changes, so the identity remains stable while a declaration refresh is pending.
+ */
+export function pluginConnectorPresence(): Promise<PluginConnectorPresence[]> {
+  return serial(async () => {
+    const current = await rows();
+    return current.flatMap(row => {
+      const publication = publications.get(row.surface);
+      return publication && row.appId
+        ? [{ surface: row.surface, connectorName: publication.connectorName, connectorId: `plugin_${row.appId}` }]
+        : [];
+    });
+  });
+}
 /**
  * Explicit user retry for one still-unclaimed refresh obligation.
  *

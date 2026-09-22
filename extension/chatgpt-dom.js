@@ -73,6 +73,146 @@ var CLF_DOM = (() => {
     const boundary = '\n[[/COS_CONTEXT]]\n\n';
     return value.startsWith(boundary, end) ? identity + value.slice(end + boundary.length) : null;
   }
+  const CONNECTOR_ID = /^plugin_asdk_app_[a-zA-Z0-9_-]{1,160}$/;
+  const normalizeConnectorLabel = value => String(value || '').replace(/\s+/g, ' ').trim();
+
+  /**
+   * Proves that ChatGPT's composer owns a structured app mention for this exact connector.
+   * Plain authored text such as "@Chat On Steroids Core" is deliberately insufficient:
+   * #253 is a per-message app-selection bug, so only a provider-owned non-editable/token node
+   * (preferably carrying the exact app id) can authorize Send.
+   */
+  function connectorMentionSelected(connectorName, connectorId) {
+    return safe(() => {
+      if (!connectorName || !CONNECTOR_ID.test(connectorId)) return false;
+      const box = composer(), host = composerBox();
+      if (!box || !host) return false;
+      const appId = connectorId.slice('plugin_'.length);
+      const wanted = normalizeConnectorLabel(connectorName);
+      const inline = [...box.querySelectorAll(
+        '[data-app-id],[data-plugin-id],[data-mention-id],[data-testid*="mention" i],[contenteditable="false"]'
+      )];
+      const external = [...host.querySelectorAll(
+        '[data-app-id],[data-plugin-id],[data-mention-id],[data-testid*="mention" i]'
+      )].filter(node => !box.contains(node));
+      const nodes = [...new Set([...inline, ...external])].filter(node => node !== box && !node.closest(OWN_SURFACES));
+      return nodes.some(node => {
+        const label = normalizeConnectorLabel(node.textContent).replace(/^@\s*/, '');
+        if (label !== wanted) return false;
+        const attributes = [...node.attributes].map(attribute => `${attribute.name}=${attribute.value}`).join(' ');
+        const exactId = attributes.includes(connectorId) || attributes.includes(appId);
+        const tokenShape = box.contains(node) && (node.getAttribute('contenteditable') === 'false' ||
+          node.hasAttribute('data-mention-id') || /mention/i.test(node.getAttribute('data-testid') || ''));
+        return exactId || tokenShape;
+      });
+    }, false);
+  }
+
+  function renderedConnectorCandidate(node) {
+    if (!renderedComposerNode(node) && !safe(() => node.getClientRects().length > 0, false)) return false;
+    if (node.closest(OWN_SURFACES) || node.closest('[hidden],[aria-hidden="true"],[inert]')) return false;
+    return true;
+  }
+
+  /** Exact native @-mention suggestion for one installed connector, or null when ambiguous. */
+  function connectorMentionOption(connectorName, connectorId) {
+    return safe(() => {
+      if (!connectorName || !CONNECTOR_ID.test(connectorId)) return null;
+      const appId = connectorId.slice('plugin_'.length), wanted = normalizeConnectorLabel(connectorName);
+      const roots = [...document.querySelectorAll(
+        '[role="listbox"],[role="menu"],[data-radix-popper-content-wrapper],[role="dialog"]'
+      )].filter(root => !root.closest(OWN_SURFACES) && safe(() => root.getClientRects().length > 0, false));
+      const candidates = [];
+      for (const root of roots) {
+        for (const node of root.querySelectorAll('[role="option"],[role="menuitem"],button,[role="button"]')) {
+          if (!renderedConnectorCandidate(node)) continue;
+          const label = normalizeConnectorLabel(node.textContent).replace(/^@\s*/, '');
+          if (label !== wanted && !label.startsWith(`${wanted} `)) continue;
+          const attributes = [...node.attributes].map(attribute => `${attribute.name}=${attribute.value}`).join(' ');
+          candidates.push({ node, exactId: attributes.includes(connectorId) || attributes.includes(appId), label });
+        }
+      }
+      const exact = candidates.filter(candidate => candidate.exactId);
+      if (exact.length === 1) return exact[0].node;
+      // Current ChatGPT mention menus do not always expose app ids in DOM attributes.
+      // A unique exact visible connector name is still safe because the app's installed
+      // connector name is canonical and the post-click token must be verified separately.
+      const named = candidates.filter(candidate => candidate.label === wanted);
+      return named.length === 1 ? named[0].node : null;
+    }, null);
+  }
+
+  function waitForConnector(predicate, timeoutMs) {
+    return new Promise(resolve => {
+      let done = false, observer = null, timer = null;
+      const finish = value => {
+        if (done) return;
+        done = true;
+        observer?.disconnect();
+        if (timer !== null) clearTimeout(timer);
+        resolve(value);
+      };
+      const check = () => {
+        let value = null;
+        try { value = predicate(); } catch { value = null; }
+        if (value) finish(value);
+      };
+      observer = new MutationObserver(check);
+      observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+      timer = setTimeout(() => finish(null), Math.max(1, Math.min(5000, timeoutMs)));
+      check();
+    });
+  }
+
+  /**
+   * Selects an installed ChatGPT app through the real @-mention UI and proves the
+   * resulting structured token before returning true. It never treats injected prose
+   * as attachment evidence. Failure attempts to undo only edits owned by this operation.
+   */
+  async function selectConnectorMention(connectorName, connectorId, stillCurrent = () => true) {
+    if (!connectorName || !CONNECTOR_ID.test(connectorId) || !stillCurrent()) return false;
+    if (connectorMentionSelected(connectorName, connectorId)) return true;
+    const box = composer();
+    if (!box?.isConnected || !composerWritable() || generating() || stopButton()) return false;
+    const before = typeof box.innerText === 'string' ? box.innerText : box.textContent || '';
+    const selection = document.getSelection();
+    if (!selection) return false;
+    const rollback = () => {
+      if (composer() !== box || !box.isConnected) return;
+      // The operation owns at most two editor mutations: query insertion and native
+      // suggestion selection. Never rebuild the whole rich editor just to clean up.
+      for (let count = 0; count < 2; count++) {
+        const now = typeof box.innerText === 'string' ? box.innerText : box.textContent || '';
+        if (normalizeConnectorLabel(now) === normalizeConnectorLabel(before)) break;
+        try { if (!document.execCommand('undo', false)) break; } catch { break; }
+      }
+    };
+    try {
+      box.focus();
+      selection.selectAllChildren(box);
+      selection.collapseToEnd();
+      if (!stillCurrent() || composer() !== box || document.activeElement !== box) return false;
+      const prefix = before && !/\s$/.test(before) ? ' ' : '';
+      if (!document.execCommand('insertText', false, `${prefix}@${connectorName}`)) return false;
+      if (!stillCurrent() || composer() !== box) { rollback(); return false; }
+
+      const option = await waitForConnector(() => connectorMentionOption(connectorName, connectorId), 2500);
+      if (!option || !stillCurrent() || composer() !== box) { rollback(); return false; }
+      option.click();
+
+      const selected = await waitForConnector(
+        () => connectorMentionSelected(connectorName, connectorId) ? true : null,
+        2500
+      );
+      if (selected && stillCurrent() && composer() === box) return true;
+      rollback();
+      return false;
+    } catch {
+      rollback();
+      return false;
+    }
+  }
+
   function presentUserPrompts(readUserText) {
     return safe(() => {
       for (const raw of document.querySelectorAll(`[data-message-author-role="user"] :is(.whitespace-pre-wrap, .markdown):not([data-clf-user-text]), ${SHELL_TURN} [data-content-search-unit-key$=":user"] [data-user-message-bubble] .whitespace-pre-wrap:not([data-clf-user-text])`)) {
@@ -112,7 +252,7 @@ var CLF_DOM = (() => {
    * That is the exact loop that produced twenty copies of the same assistant update. Clone
    * and strip our nodes before extracting page text. Unknown/fake DOMs fall back safely.
    */
-  const OWN_SURFACES = '.clf-stream, .clf-stage, .clf-composer, .clf-boot, [data-clf-user-text]';
+  const OWN_SURFACES = '.clf-stream, .clf-stage, .clf-composer, .clf-boot, .clf-connector-warning, [data-clf-user-text]';
 
   /**
    * Removes this extension's own rendered surfaces from a clone, in place.
@@ -2535,6 +2675,9 @@ var CLF_DOM = (() => {
     turnIdOf,
     messageIdOf,
     userPromptText,
+    connectorMentionSelected,
+    connectorMentionOption,
+    selectConnectorMention,
     userMessageReaction,
     presentUserPrompts,
     composerVisible,

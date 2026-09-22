@@ -838,13 +838,98 @@
       at: Date.now()
     };
   }
+
+  let connectorAttachBusy = false;
+  function coreConnectorPresence() {
+    const rows = connectorPresence.filter(row => row?.surface === 'core' &&
+      typeof row.connectorName === 'string' && typeof row.connectorId === 'string');
+    return rows.length === 1 ? rows[0] : null;
+  }
+  function clearConnectorWarning() {
+    for (const node of document.querySelectorAll('.clf-connector-warning')) node.remove();
+  }
+  function showConnectorWarning(message) {
+    clearConnectorWarning();
+    const host = CLF_DOM.composerBox?.() || CLF_DOM.composer()?.closest('form');
+    if (!host?.parentElement) return;
+    const note = document.createElement('div');
+    note.className = 'clf-connector-warning';
+    note.setAttribute('role', 'status');
+    note.textContent = message;
+    note.style.cssText = 'font-size:12px;line-height:1.35;margin:4px 12px;color:var(--text-secondary,#8a8a8a)';
+    host.parentElement.insertBefore(note, host.nextSibling);
+  }
+  /**
+   * ChatGPT custom apps are selected per message. A paired CoS conversation therefore
+   * cannot infer that Core remains attached just because the tunnel and session are alive.
+   * On a trusted manual Send, stop the native event only when Core is not already selected,
+   * select it through ChatGPT's structured @-mention UI, prove the resulting token, then
+   * spend exactly one programmatic click on the still-identical draft. Failure leaves the
+   * user's draft untouched and visible rather than silently sending a tool-less turn.
+   */
+  function interceptManualSend(event) {
+    if (event?.isTrusted !== true || connectorAttachBusy || desktopDecision || commandAttempt) return false;
+    const core = coreConnectorPresence();
+    if (!core) return false;
+    if (CLF_DOM.connectorMentionSelected(core.connectorName, core.connectorId)) {
+      clearConnectorWarning();
+      return false;
+    }
+    const box = CLF_DOM.composer(), route = CLF_DOM.conversationId();
+    if (!box?.isConnected) return false;
+    const draft = typeof box.innerText === 'string' ? box.innerText : box.textContent || '';
+    if (!draft.trim() && !CLF_DOM.composerAttachmentNames().length) return false;
+
+    event.preventDefault?.();
+    event.stopImmediatePropagation?.();
+    connectorAttachBusy = true;
+    clearConnectorWarning();
+    let interrupted = false;
+    const host = CLF_DOM.composerBox?.() || box.closest('form') || box;
+    const interruptionEvents = ['input', 'change', 'keydown', 'pointerdown', 'paste', 'drop'];
+    const interrupt = changed => { if (changed.isTrusted) interrupted = true; };
+    for (const name of interruptionEvents) host.addEventListener(name, interrupt, true);
+    const stillCurrent = () => alive && connectorAttachBusy && !interrupted &&
+      CLF_DOM.composer() === box && box.isConnected && CLF_DOM.conversationId() === route &&
+      !generating && !CLF_DOM.generating();
+    void CLF_DOM.selectConnectorMention(core.connectorName, core.connectorId, stillCurrent).then(selected => {
+      // A successful structured selection necessarily mutates the rich editor, so the
+      // pre-selection text equality is no longer the right postcondition. Route/editor
+      // identity still must be exact, and the token itself is re-proved before Send.
+      const current = alive && CLF_DOM.composer() === box && box.isConnected &&
+        CLF_DOM.conversationId() === route && !generating && !CLF_DOM.generating();
+      if (!selected || !current || !CLF_DOM.connectorMentionSelected(core.connectorName, core.connectorId)) {
+        showConnectorWarning('Chat On Steroids Core could not be attached to this message. Your draft was not sent.');
+        return;
+      }
+      const button = CLF_DOM.sendButton?.();
+      if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') {
+        showConnectorWarning('Chat On Steroids Core was attached, but ChatGPT Send is not ready. Your draft was not sent.');
+        return;
+      }
+      clearConnectorWarning();
+      // This click is untrusted, so it cannot re-enter this guard. The ordinary capture
+      // listener below mints the exact user-send receipt immediately before ChatGPT handles it.
+      button.click();
+    }).catch(() => {
+      showConnectorWarning('Chat On Steroids Core could not be attached to this message. Your draft was not sent.');
+    }).finally(() => {
+      for (const name of interruptionEvents) host.removeEventListener(name, interrupt, true);
+      connectorAttachBusy = false;
+    });
+    return true;
+  }
+
   document.addEventListener('click', (event) => {
     const button = CLF_DOM.sendButton?.();
-    if (button && event.target && button.contains(event.target)) rememberUserSend();
+    if (!button || !event.target || !button.contains(event.target)) return;
+    if (interceptManualSend(event)) return;
+    rememberUserSend();
   }, true);
   document.addEventListener('submit', (event) => {
     const composer = CLF_DOM.composer();
     if (composer && event.target && typeof event.target.contains === 'function' && event.target.contains(composer)) {
+      if (interceptManualSend(event)) return;
       rememberUserSend();
     }
   }, true);
@@ -857,7 +942,10 @@
       event.key === 'Enter' &&
       !event.shiftKey &&
       !event.isComposing
-    ) rememberUserSend();
+    ) {
+      if (interceptManualSend(event)) return;
+      rememberUserSend();
+    }
   }, true);
 
   /**
@@ -871,6 +959,7 @@
    */
   let tokens = 0;
   let context = null;
+  let connectorPresence = [];
   /**
    * The app's answer to "may this chat compact itself right now?", refreshed every poll.
    *
@@ -6313,6 +6402,14 @@
       }
       tokens = Number.isFinite(Number(data.tokens)) ? Number(data.tokens) : 0;
       context = readContext(data.context);
+      connectorPresence = Array.isArray(data.connectorPresence) ? data.connectorPresence.flatMap(row => {
+        if (!row || typeof row !== 'object') return [];
+        const connectorName = typeof row.connectorName === 'string' ? row.connectorName.slice(0, 100) : '';
+        const connectorId = typeof row.connectorId === 'string' && /^plugin_asdk_app_[a-zA-Z0-9_-]{1,160}$/.test(row.connectorId)
+          ? row.connectorId : '';
+        const surface = ['core', 'desktop', 'plugins'].includes(row.surface) ? row.surface : '';
+        return connectorName && connectorId && surface ? [{ surface, connectorName, connectorId }] : [];
+      }).slice(0, 3) : [];
       // The goal loop's settings and, while one is running, the draft itself: its stage, the
       // text OpenRouter has streamed so far, and — once it is `ready` — the message to type.
       // Nothing is typed here; maybeSendGoalReply below owns that, after the pull has

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const wake = vi.hoisted(() => vi.fn());
 vi.mock('../src/main/browser-wake.js', () => ({ wakeBrowserWork: wake }));
 import { initDurableStore, resetDurableForTests, readDurable, writeDurableNow } from '../src/main/durable.js';
-import { claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh, pendingPluginRefreshes, pluginRefreshPublications, publishPluginSurface, rearmPluginRefresh, resetPluginRefreshForTests, unpublishPluginSurface } from '../src/main/plugin-refresh.js';
+import { claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh, pendingPluginRefreshes, pluginConnectorPresence, pluginRefreshPublications, publishPluginSurface, rearmPluginRefresh, resetPluginRefreshForTests, unpublishPluginSurface } from '../src/main/plugin-refresh.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 import { buildServer } from '../src/main/mcp/tools.js';
 import { defaultConfig } from '../src/main/config.js';
@@ -15,6 +15,24 @@ afterEach(async () => { resetPluginRefreshForTests(); resetDurableForTests(); aw
 const publish = (version = '1', declarations = tools) => { publishPluginSurface('core', 'Chat On Steroids Core', version, 'Instructions', declarations); vi.advanceTimersByTime(20_000); };
 const publishPlugins = (declarations: PluginToolSchema[]) => { publishPluginSurface('plugins', 'Chat On Steroids Plugins', '1', 'Instructions', declarations); vi.advanceTimersByTime(20_000); };
 const claim = (request: { id: string }, declarations = [{ ...tools[0]!, description: 'Older declaration' }]) => claimPluginRefresh({ ...request, appId, connectorName: 'Chat On Steroids Core', tools: declarations });
+it('retains proven connector identity across unchanged turns and a pending schema change', async () => {
+  publish();
+  const request = (await pendingPluginRefreshes())[0]!;
+  expect(await claimPluginRefresh({ ...request, appId, connectorName: 'Chat On Steroids Core', tools, alreadyCurrent: true })).toBe(true);
+  const expected = [{ surface: 'core', connectorName: 'Chat On Steroids Core', connectorId: 'plugin_asdk_app_example' }];
+  expect(await pluginConnectorPresence()).toEqual(expected);
+
+  // Turns 2-4 do not change the MCP declaration. Presence must not depend on another refresh.
+  publish(); publish(); publish();
+  expect(await pluginConnectorPresence()).toEqual(expected);
+  expect(await pendingPluginRefreshes()).toEqual([]);
+
+  // Even while a changed schema is waiting for refresh, the already-proven installed connector
+  // identity remains the same thing ChatGPT can route to.
+  publishPluginSurface('core', 'Chat On Steroids Core', '1', 'Instructions', [{ ...tools[0]!, description: 'Changed declaration' }]);
+  expect(await pluginConnectorPresence()).toEqual(expected);
+});
+
 it('debounces only changed declarations for twenty seconds and fences stale claims', async () => {
   publish(); const old = (await pendingPluginRefreshes())[0]!;
   const change = (description: string) => publishPluginSurface('core', 'Chat On Steroids Core', '1', 'Instructions', [{ ...tools[0]!, description }]);
