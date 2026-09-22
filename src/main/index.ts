@@ -64,6 +64,8 @@ import {
   type ContinuationSnapshot
 } from './session/continuation.js';
 import { runShutdownSequence } from './shutdown.js';
+import { buildWindowTitle } from '../shared/build-identity.js';
+import { forkRestartRequested } from './fork-restart.js';
 import { applyStagedUpdate, startUpdateChecks } from './update.js';
 import { UI_BASE_ZOOM, windowLayoutForWorkArea, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { openInPreferredBrowser } from './browser.js';
@@ -127,7 +129,7 @@ function createWindow(): void {
     } : {}),
     // Painted before the renderer loads, so a dark window never flashes white.
     backgroundColor: windowBackgroundForTheme(getConfig().ui.theme, getConfig().ui.appearance),
-    title: 'Chat On Steroids',
+    title: buildWindowTitle(),
     webPreferences: {
       zoomFactor: UI_BASE_ZOOM,
       preload: path.join(__dirname, '../preload/index.js'),
@@ -138,6 +140,12 @@ function createWindow(): void {
       // The renderer only ever loads our own local files.
       webSecurity: true
     }
+  });
+
+  const fixedWindowTitle = buildWindowTitle();
+  window.webContents.on('page-title-updated', (event) => {
+    event.preventDefault();
+    window?.setTitle(fixedWindowTitle);
   });
 
   if (process.platform === 'win32') window.removeMenu();
@@ -276,7 +284,7 @@ function refreshTray(): void {
   const running = connected || offline;
   const label = connected ? 'Connected' : offline ? 'No internet' : 'Not connected';
   tray.setImage(trayIcon(running));
-  tray.setToolTip(`Chat On Steroids — ${label.toLowerCase()}`);
+  tray.setToolTip(`${buildWindowTitle()} — ${label.toLowerCase()}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label, enabled: false },
@@ -299,6 +307,11 @@ function refreshTray(): void {
 }
 
 app.on('second-instance', (_event, argv) => {
+  if (forkRestartRequested(argv)) {
+    quitting = true;
+    app.quit();
+    return;
+  }
   if (!isBackgroundLaunch(argv)) windowActivation.request();
 });
 

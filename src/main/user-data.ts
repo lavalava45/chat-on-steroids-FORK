@@ -8,7 +8,10 @@ import path from 'node:path';
 export const FORK_USER_DATA_DIRECTORY = 'chat-on-steroids-FORK';
 
 export function forkUserDataPath(appDataDir: string): string {
-  return path.join(appDataDir, FORK_USER_DATA_DIRECTORY);
+  const directory = typeof __COS_FORK_PROFILE_DIRECTORY__ === 'undefined'
+    ? FORK_USER_DATA_DIRECTORY
+    : __COS_FORK_PROFILE_DIRECTORY__;
+  return path.join(appDataDir, directory);
 }
 
 /**
