@@ -886,8 +886,16 @@
     clearConnectorWarning();
     let interrupted = false;
     const host = CLF_DOM.composerBox?.() || box.closest('form') || box;
-    const interruptionEvents = ['input', 'change', 'keydown', 'pointerdown', 'paste', 'drop'];
-    const interrupt = changed => { if (changed.isTrusted) interrupted = true; };
+    // execCommand('insertText'), which the native @-mention flow uses below, emits a
+    // trusted input event in Chrome even though the mutation is ours. Treating that as
+    // user activity makes the guard cancel itself before it can select Core. beforeinput
+    // still catches real editor changes (typing, IME, dictation, paste) before they land,
+    // while the other gesture events retain the same conservative interruption policy.
+    // When Enter initiated this very Send, the same trusted keydown continues down the
+    // capture path after this listener is installed; that exact initiating event is not
+    // a second user action and must not cancel its own attach.
+    const interruptionEvents = ['beforeinput', 'change', 'keydown', 'pointerdown', 'paste', 'drop'];
+    const interrupt = changed => { if (changed !== event && changed.isTrusted) interrupted = true; };
     for (const name of interruptionEvents) host.addEventListener(name, interrupt, true);
     const stillCurrent = () => alive && connectorAttachBusy && !interrupted &&
       CLF_DOM.composer() === box && box.isConnected && CLF_DOM.conversationId() === route &&
