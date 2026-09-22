@@ -79,6 +79,7 @@ import {
 import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
 import { editContextMenuTemplate } from './edit-context-menu.js';
+import { forkUserDataPath, shouldUseForkUserData } from './user-data.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -90,6 +91,15 @@ let quitting = false;
 let shutdownStarted = false;
 let shutdownComplete = false;
 const usageWarmup = new AbortController();
+
+// Select the fork-owned profile before the single-instance lock and before any config, durable
+// state, sessions, plugins or extension materialization can touch disk. Deliberately external
+// test/portable profiles remain authoritative.
+const appDataPath = app.getPath('appData');
+const currentUserDataPath = app.getPath('userData');
+if (shouldUseForkUserData(appDataPath, currentUserDataPath)) {
+  app.setPath('userData', forkUserDataPath(appDataPath));
+}
 
 // One instance only: two copies would fight over the tunnel and the config file.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
