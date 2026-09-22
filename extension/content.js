@@ -884,9 +884,13 @@
     event.stopImmediatePropagation?.();
     connectorAttachBusy = true;
     clearConnectorWarning();
-    const stillCurrent = () => alive && connectorAttachBusy && CLF_DOM.composer() === box && box.isConnected &&
-      CLF_DOM.conversationId() === route &&
-      (typeof box.innerText === 'string' ? box.innerText : box.textContent || '') === draft &&
+    let interrupted = false;
+    const host = CLF_DOM.composerBox?.() || box.closest('form') || box;
+    const interruptionEvents = ['input', 'change', 'keydown', 'pointerdown', 'paste', 'drop'];
+    const interrupt = changed => { if (changed.isTrusted) interrupted = true; };
+    for (const name of interruptionEvents) host.addEventListener(name, interrupt, true);
+    const stillCurrent = () => alive && connectorAttachBusy && !interrupted &&
+      CLF_DOM.composer() === box && box.isConnected && CLF_DOM.conversationId() === route &&
       !generating && !CLF_DOM.generating();
     void CLF_DOM.selectConnectorMention(core.connectorName, core.connectorId, stillCurrent).then(selected => {
       // A successful structured selection necessarily mutates the rich editor, so the
@@ -909,7 +913,10 @@
       button.click();
     }).catch(() => {
       showConnectorWarning('Chat On Steroids Core could not be attached to this message. Your draft was not sent.');
-    }).finally(() => { connectorAttachBusy = false; });
+    }).finally(() => {
+      for (const name of interruptionEvents) host.removeEventListener(name, interrupt, true);
+      connectorAttachBusy = false;
+    });
     return true;
   }
 
