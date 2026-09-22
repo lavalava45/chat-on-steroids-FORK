@@ -11439,7 +11439,7 @@ describe('the goal loop over the bridge', () => {
    * about one chat, at the moment it is made. So it arms the loop on its own: somebody who
    * has just written down the finish line should not then have to find a second switch.
    */
-  it('arms the loop for one chat from its own goal, with the standing switch off', async () => {
+  it('keeps a saved objective dormant while the effective switch is off', async () => {
     await pair();
     const chat = 'cafe0021-0000-4000-8000-000000000021';
     await saveConfig({
@@ -11488,11 +11488,19 @@ describe('the goal loop over the bridge', () => {
         choices: [{ message: { content: JSON.stringify({ action: 'continue', reply: 'the tests are still red' }) } }]
       })) as never;
     try {
-      // The switch is still off, and the draft is still allowed — the goal is what allows it.
+      // A saved objective is content, not automation authority. Off remains authoritative.
       await recordFinalForTest(chat, 'g-obj');
       const drafted = await request('POST', '/goal/draft', { body: { conversationId: chat, turnId: 'g-obj' } });
-      expect(drafted.status).toBe(200);
+      expect(drafted.status).toBe(409);
+      expect(drafted.body.error).toBe('goal_disabled');
       expect(getConfig().goal.enabled).toBe(false);
+
+      // Explicitly turning Goal on reuses the objective without requiring it to be typed again.
+      const { setGoalSwitchNow } = await import('../src/main/goal.js');
+      await setGoalSwitchNow(chat, 'goal', true);
+      expect(goalSwitchFor(chat)).toMatchObject({ enabled: true, mode: 'goal', own: true });
+      const restarted = await request('POST', '/goal/draft', { body: { conversationId: chat, turnId: 'g-obj' } });
+      expect(restarted.status).toBe(200);
     } finally {
       globalThis.fetch = realFetch;
     }

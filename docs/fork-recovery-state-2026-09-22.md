@@ -254,3 +254,19 @@ The first live slot-A activation exposed one additional profile-clone requiremen
 Slot A was repaired in-place by changing only that `directory` to the matching generation under `%APPDATA%\chat-on-steroids-FORK-slot-a\plugins`; the JSON array shape must be preserved. The plugin then became visible after restart.
 
 Fork patch `profile-plugin-rebase` now makes this clone operation self-healing: before plugin-record validation, an old absolute generation path is rebased only when it has the standard `<plugins>/<plugin-id>/<generation>` shape and that exact generation already exists below the active fork profile. The normalized array is then persisted. This protects slot B and future resets/clones from repeating the slot-A failure.
+
+## Quiet automation boundaries found during live slot-A acceptance
+
+Live slot A exposed three separate automation behaviours that looked like one failure from the desktop:
+
+- automatic plugin schema refresh can create a visible `#settings/Plugins` helper tab when ordinary background-chat mode is off;
+- a saved Goal objective can implicitly arm Goal even while the effective global Goal switch is Off and the chat has no per-chat override;
+- explicit Desktop `browser_*` tools still use the browser-control debugger path, as intended, and therefore can show Chrome's debugging banner. The earlier `no-auto-debugger-lease` patch only removes automatic rendering leases, not explicit browser control.
+
+Fork patch `quiet-automation-boundaries` changes the first two contracts and instruments the third:
+
+- saved objectives remain durable but never grant Goal/Loop authority; the effective switch is the sole automation authority, so Off means Off;
+- automatic plugin-refresh helper tabs always use the extension-owned background window, regardless of ordinary background-chat preference; manual navigation/Refresh is unchanged;
+- every `browser_*` execution logs tool, session, conversation and request identity before browser-control executes, so a future debugger banner can be attributed without inference.
+
+The standard continuation text observed in the ChatGPT composer is confirmed to come from `src/shared/recovery.ts`; one of the built-in `CONTINUE_TEXTS` strings is `Carry on until everything requested is finished.`

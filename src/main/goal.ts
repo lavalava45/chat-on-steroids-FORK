@@ -954,17 +954,14 @@ export function goalSwitchEnabledFor(conversationId: string): boolean {
 }
 
 /**
- * The switch and the saved goal read as one answer — the same one the bridge gives.
+ * Automation authority comes only from the effective switch.
  *
- * A chat that has moved its own switch is answered by that switch alone, Off included; a chat
- * that never has still lets a goal typed into it arm the loop, so writing the finish line does
- * not also require finding the app-wide setting. Kept beside the switch itself because the two
- * places that ask — the route and the ticket below — must never drift apart.
+ * A saved objective is durable content, not permission to keep driving the chat. In the fork,
+ * Off must mean Off everywhere the UI reports it, including restored/cloned profiles with an
+ * old objective. Turning Goal/Loop back on reuses the saved objective without requiring re-entry.
  */
 export function goalArmedFor(conversationId: string): boolean {
-  const held = goalSwitchFor(conversationId);
-  if (held.own) return held.enabled;
-  return held.enabled || goalObjectiveFor(conversationId) !== '';
+  return goalSwitchFor(conversationId).enabled;
 }
 
 /**

@@ -9,7 +9,7 @@ it('keeps one operation on its original tab after marker loss, worker restart, a
   const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const saved: Record<string, unknown> = {};
   let tab: { id: number; url: string } | null = null;
-  const create = vi.fn(async (url: string) => (tab = { id: 8, url }));
+  const create = vi.fn(async (url: string, _background?: boolean) => (tab = { id: 8, url }));
   const update = vi.fn(async (_id: number, patch: { url: string }) => { if (tab) tab.url = patch.url; return tab; });
   const storage = { session: { get: async () => saved, set: async (next: object) => { Object.assign(saved, next); } } };
   const start = () => {
@@ -20,6 +20,7 @@ it('keeps one operation on its original tab after marker loss, worker restart, a
   };
   await start().run([{}], true);
   expect(create).toHaveBeenCalledTimes(1);
+  expect(create).toHaveBeenCalledWith(expect.any(String), true);
   tab!.url = 'https://chatgpt.com/#settings/Plugins/plugin_asdk_app_synthetic';
   await start().run([{}], true);
   expect(create).toHaveBeenCalledTimes(1);
@@ -37,6 +38,16 @@ it('does not create a plugin helper in browser-only mode', async () => {
   vm.runInContext(`${workflow}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
   await context.run([{}], true, true);
   expect(create).not.toHaveBeenCalled();
+});
+
+it('keeps automatic plugin refresh hidden even when ordinary background chats are disabled', async () => {
+  const create = vi.fn(async (_url: string, background?: boolean) => ({ id: 8, background }));
+  const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: create,
+    call: async () => ({ ok: true, data: { requests: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', appId: null }] } }),
+    chrome: { storage: { session: { get: async () => ({}), set: async () => {} } }, tabs: { query: async () => [] } } });
+  vm.runInContext(`${workflow}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
+  await context.run([{}], false, false);
+  expect(create).toHaveBeenCalledWith(expect.any(String), true);
 });
 
 it('records browser creation failure before claim and retries the same obligation', async () => {

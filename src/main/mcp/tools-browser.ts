@@ -12,6 +12,7 @@ import { conversationAttachment } from '../session/store.js';
 import { compactingConversation } from '../session/continuation.js';
 import { dormantWorkerNotice, endedWorkerNotice, retiredWorkerForConversation } from '../agents.js';
 import { requestCorrelation } from '../session/correlation.js';
+import { logInfo } from '../logger.js';
 
 const tabId = z.string().regex(/^[a-f\d-]{36}:\d+$/i).describe('Exact tabId returned by browser_tabs.');
 const pageId = z.string().uuid('Copy the top-level pageId from the observation, not a frameId or element ref.').describe('Exact top-level pageId UUID from attach, snapshot or screenshot. Do not extract it from an element ref. Navigation invalidates it.');
@@ -90,6 +91,7 @@ export function registerBrowserTools(reg: SurfaceRegistrar): void {
         const owner = exact?.sessionId ? `session:${exact.sessionId}` : getConfig().multiAgent.allowUnattributedCalls
           ? caller?.requestId ? `request:${caller.requestId}` : 'unattributed' : null;
         if (!owner) return failIdentity('BROWSER_IDENTITY_REQUIRED: exact local session or Allow unattributed calls is required. No browser operation ran.');
+        logInfo(`browser-control owner tool=${tool} session=${exact?.sessionId ?? 'none'} conversation=${exact?.conversationId ?? caller?.conversationId ?? 'none'} request=${caller?.requestId ?? 'none'}`);
         const allowed = async () => {
           const config = getConfig();
           if (!effectiveCapabilities(config)[capability]) return false;

@@ -2153,7 +2153,10 @@ function inspectRequestedPluginRefresh(publications, background, browserOnly = f
     if (!held) {
       if (browserOnly) return;
       try {
-        const tab = await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, background);
+        // Automatic schema maintenance must never steal the user's visible ChatGPT tab/window.
+        // A plugin refresh helper is implementation detail, so always keep it in the extension's
+        // owned background window. Manual user navigation/Refresh remains untouched.
+        const tab = await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, true);
         await chrome.storage.session.set({ pluginRefreshOwner: { id: request.id, tab: tab.id } });
       }
       catch {
