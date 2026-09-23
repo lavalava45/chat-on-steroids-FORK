@@ -10,8 +10,8 @@ const statePath = path.join(releaseRoot, 'current.json');
 const action = process.argv[2];
 const requestedSlot = process.argv[3] || null;
 
-if (!['build', 'swap', 'rollback'].includes(action)) {
-  console.error('Usage: node scripts/local-release.mjs <build|swap|rollback> [slot-a|slot-b]');
+if (!['build', 'swap', 'rollback', 'sync'].includes(action)) {
+  console.error('Usage: node scripts/local-release.mjs <build|swap|rollback|sync> [slot-a|slot-b]');
   process.exit(2);
 }
 if (requestedSlot && requestedSlot !== 'slot-a' && requestedSlot !== 'slot-b') {
@@ -20,6 +20,10 @@ if (requestedSlot && requestedSlot !== 'slot-a' && requestedSlot !== 'slot-b') {
 }
 if (action === 'rollback' && requestedSlot) {
   console.error('rollback does not accept an explicit target slot');
+  process.exit(2);
+}
+if (action === 'sync' && requestedSlot) {
+  console.error('sync does not accept an explicit target slot');
   process.exit(2);
 }
 
@@ -145,6 +149,31 @@ function readBuildMetadata(slot) {
   }
 }
 
+function writeState(state) {
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  const temporary = `${statePath}.tmp-${process.pid}`;
+  fs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`);
+  fs.renameSync(temporary, statePath);
+}
+
+function reconcileState(recordedState, detectedSlot) {
+  if (!detectedSlot) return null;
+  const metadata = readBuildMetadata(detectedSlot);
+  const branch = metadata?.branch ?? recordedState?.branch ?? 'unknown';
+  const commit = metadata?.commit ?? recordedState?.commit ?? 'unknown';
+  const unchanged = recordedState?.active === detectedSlot &&
+    recordedState?.branch === branch && recordedState?.commit === commit &&
+    typeof recordedState?.switchedAt === 'string' && recordedState.switchedAt.length > 0;
+  const next = {
+    active: detectedSlot,
+    branch,
+    commit,
+    switchedAt: unchanged ? recordedState.switchedAt : new Date().toISOString()
+  };
+  if (!unchanged) writeState(next);
+  return next;
+}
+
 function armHandoff(target, slot, branch, commit, sourceSlot) {
   const helper = path.join(root, 'scripts', 'local-release-helper.mjs');
   if (!sourceSlot) throw new Error('Cannot arm a restart handoff without a detected active local slot.');
@@ -162,11 +191,18 @@ function armHandoff(target, slot, branch, commit, sourceSlot) {
 
 const recordedState = readState();
 const detectedSlot = runningLocalSlot();
-// current.json records the last completed handoff; it is not proof that a local slot is running
-// now. Only a process whose executable path matches a slot may become the active runtime owner.
-const state = detectedSlot ? { ...(recordedState ?? {}), active: detectedSlot } : null;
+// The running executable is the source of truth. Keep current.json reconciled with that runtime
+// before every release action so a manual launch or an interrupted older helper cannot leave a
+// stale active-slot marker behind.
+const state = reconcileState(recordedState, detectedSlot);
 const branch = git(['branch', '--show-current']);
 const commit = git(['rev-parse', '--short=7', 'HEAD']);
+
+if (action === 'sync') {
+  if (!state) throw new Error('No running local release slot was detected; current.json was not changed.');
+  console.log(`Synchronized: ${state.active} @ ${state.commit}`);
+  process.exit(0);
+}
 
 if (action === 'rollback') {
   if (!state) throw new Error('No active local release is recorded yet; rollback is unavailable.');

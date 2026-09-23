@@ -10,9 +10,9 @@ if (!targetExe || !statePath || !targetSlot || !branch || !commit || !sourceExe)
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function runningSourceProcesses() {
+function runningProcesses(exe) {
   if (process.platform !== 'win32') return [];
-  const source = path.normalize(sourceExe).toLowerCase();
+  const wanted = path.normalize(exe).toLowerCase();
   const script = [
     "$ErrorActionPreference='SilentlyContinue'",
     "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'Chat On Steroids.exe' } | ForEach-Object { $_.ProcessId.ToString() + '|' + $_.ExecutablePath }"
@@ -26,8 +26,18 @@ function runningSourceProcesses() {
     .filter((line) => {
       const separator = line.indexOf('|');
       if (separator < 0) return false;
-      return path.normalize(line.slice(separator + 1)).toLowerCase() === source;
+      return path.normalize(line.slice(separator + 1)).toLowerCase() === wanted;
     });
+}
+
+const runningSourceProcesses = () => runningProcesses(sourceExe);
+const runningTargetProcesses = () => runningProcesses(targetExe);
+
+function writeState() {
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  const temporary = `${statePath}.tmp-${process.pid}`;
+  fs.writeFileSync(temporary, `${JSON.stringify({ active: targetSlot, branch, commit, switchedAt: new Date().toISOString() }, null, 2)}\n`);
+  fs.renameSync(temporary, statePath);
 }
 
 function launch(exe, args = []) {
@@ -56,6 +66,17 @@ while (Date.now() < deadline) {
 
 if (runningSourceProcesses().length !== 0) process.exit(3);
 
+// A pre-existing target would make "target is running" ambiguous evidence. Fail closed rather
+// than recording a handoff we cannot prove this helper performed.
+if (runningTargetProcesses().length !== 0) process.exit(4);
+
 launch(plan.target.exe, plan.target.args);
-fs.mkdirSync(path.dirname(statePath), { recursive: true });
-fs.writeFileSync(statePath, `${JSON.stringify({ active: targetSlot, branch, commit, switchedAt: new Date().toISOString() }, null, 2)}\n`);
+const targetDeadline = Date.now() + 20_000;
+while (Date.now() < targetDeadline) {
+  await sleep(250);
+  if (runningTargetProcesses().length !== 0) break;
+}
+if (runningTargetProcesses().length === 0) process.exit(5);
+
+// Only a process whose executable path matches the target slot may commit current.json.
+writeState();
