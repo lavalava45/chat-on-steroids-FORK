@@ -24,7 +24,7 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 5 | `profile-plugin-rebase` | permanent | Rebase cloned plugin generation directories into the active fork profile before plugin-record validation. |
 | 6 | `quiet-automation-boundaries` | permanent | Make Goal/Loop Off authoritative, keep automatic plugin refresh helpers in the background, and log browser-control caller ownership. |
 | 7 | `profile-safe-slot-handoff` | permanent | Send local A/B restart signals through the active source slot so isolated Electron profiles cannot start concurrently during handoff. |
-| 8 | `core-followup-auto-attach` | permanent | Keep Core selected on CoS-managed follow-up sends using the exact installed app identity; fail closed when structured attachment cannot be proved. Upstream candidate: #384. |
+| 8 | `core-followup-auto-attach` | permanent | Keep Core selected on CoS-managed follow-up sends using the exact installed app identity; fail closed when structured attachment cannot be proved; re-arm unresolved first-time enrollment once per app process and prioritize Core ahead of Desktop/Plugins. Upstream candidate: #384. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 
@@ -64,3 +64,12 @@ npm run fork:stack:abort-sync
 ```
 
 `fork:sync-upstream` intentionally does not push or activate a build. Git history publication and executable activation remain separate reviewable steps.
+
+## Current upstreaming status — 2026-09-23
+
+- `our-release` carries `core-followup-auto-attach` at `f596254`; `origin/our-release` has been updated to that commit.
+- The corresponding upstream PR is `totec448-spec/chat-on-steroids#384`, branch `fix/core-followup-auto-attach` in this fork.
+- PR #384 was updated with follow-up commit `eda80a7` so the upstream candidate now includes the restart re-arm and Core-first enrollment ordering from `f596254`, without pulling in unrelated fork-only A/B/runtime patches.
+- Local PR-branch validation after that update: `test/plugin-refresh.test.ts`, `test/content-script.test.ts`, and `test/user-prompt.test.ts` all passed, 762 tests total.
+- GitHub CI for PR head `eda80a7` is green on Linux x64, macOS arm64, and Windows x64.
+- No further PR code change is planned unless CI or upstream review exposes a concrete defect. Keep the fork patch in the stack until a deliberately selected upstream baseline/release contains the accepted equivalent; only then remove or retire it during an explicit stack sync.

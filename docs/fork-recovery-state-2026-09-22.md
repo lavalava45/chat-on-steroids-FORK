@@ -270,3 +270,28 @@ Fork patch `quiet-automation-boundaries` changes the first two contracts and ins
 - every `browser_*` execution logs tool, session, conversation and request identity before browser-control executes, so a future debugger banner can be attributed without inference.
 
 The standard continuation text observed in the ChatGPT composer is confirmed to come from `src/shared/recovery.ts`; one of the built-in `CONTINUE_TEXTS` strings is `Carry on until everything requested is finished.`
+
+## Current fork state and remaining work — 2026-09-23
+
+This section supersedes the older operational-state statements above where they describe which runtime is currently live; the earlier sections remain as historical recovery evidence.
+
+Current state:
+
+- live packaged runtime is fork `slot-a`, executable `release-local\slot-a\win-unpacked\Chat On Steroids.exe`;
+- `release-local\slot-a\build.json` and `release-local\current.json` both identify branch `our-release`, commit `f596254`, active `slot-a`;
+- the running slot-A processes were started from that packaged tree after the `f596254` build, so no rebuild or slot swap was required for the final check;
+- the user accepted the minimal live smoke for this stage as passed;
+- `origin/our-release` has been advanced to `f596254`;
+- upstream PR #384 is the clean topical branch for the Core follow-up fix. It now has follow-up commit `eda80a7`, adding one fresh unresolved-enrollment request per app process after restart plus Core-first ordering, while excluding unrelated fork-only release/profile changes;
+- local validation of that PR head passed 762 focused/related tests across `plugin-refresh`, `content-script`, and `user-prompt`.
+- GitHub CI for PR #384 at `eda80a7` passed on Linux x64, macOS arm64, and Windows x64.
+
+Remaining work is deliberately limited to the following items:
+
+1. **PR #384 lifecycle.** Treat the code as finished unless CI or upstream review reports a concrete problem. After upstream eventually merges an accepted equivalent, keep `core-followup-auto-attach` in the fork until the selected upstream baseline/release actually contains that implementation; retire it only during an explicit patch-stack sync.
+2. **Recovery reload/silence investigation.** The separate `Reloaded chat to recover an undelivered follow-up.` / silent-recovery behaviour is not part of PR #384 and still needs its own focused investigation later.
+3. **Debugger-window behaviour.** Settings/Debugger windows and Chrome debugger ownership triggered by explicit browser-control remain a separate issue. Do not use browser-control or automatic reloads as diagnostics for the current Core-follow-up problem; that path has itself caused hangs/reloads during investigation.
+4. **Plugin-refresh edge cases/polish.** Any remaining helper-tab, stale-refresh, or plugin-refresh UX/reliability edge cases should be handled as a separate task/PR rather than expanding #384.
+5. **A/B release maintenance.** `slot-b` is older than the accepted live `slot-a`; there is no need to rebuild or switch to it for this completed stage. Rebuild the inactive slot only when a future release/swap actually requires it.
+
+Do not reopen these deferred items merely to add confidence to #384. The acceptance boundary for this stage is the live `f596254` slot-A smoke plus the clean upstream PR and its CI/review outcome.
