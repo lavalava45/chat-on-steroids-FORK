@@ -2531,7 +2531,7 @@ describe.each(['off', 'goal', 'loop'] as const)('shared automatic Continue (%s)'
     } finally { clock.mockRestore(); }
   });
 
-  it('retains the same frozen ticket across restore and the shared 2/5/10/15 pickup schedule', async () => {
+  it('retains the same frozen ticket after restore without buying repeated pickup reloads', async () => {
     let now = Date.now(); const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const bridge = await import('../src/main/bridge.js');
     try {
@@ -2539,12 +2539,11 @@ describe.each(['off', 'goal', 'loop'] as const)('shared automatic Continue (%s)'
       for (const minutes of [2, 5, 10, 15]) {
         input.resetInputForTests();
         now += minutes * 60_000;
-        expect(await input.pendingQueuedPickups()).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId })]));
+        expect(await input.pendingQueuedPickups()).not.toEqual(expect.arrayContaining([expect.objectContaining({ conversationId })]));
         await bridge.sweepStaleSwarm(now);
         const status = (await post('/status', { openConversations: [conversationId] })).body;
         const repair = status.repairs.find((item: any) => item.conversationId === conversationId);
-        expect(repair?.reason).toBe('goal'); // Existing shared pickup wire reason.
-        await post(`/status?repaired=${repair.token}&repairAction=reloaded`, { openConversations: [conversationId] });
+        expect(repair?.reason).not.toBe('goal');
         expect((await input.listInputs()).find(item => item.id === row.id)).toMatchObject({ state: 'queued', text: row.text });
         expect(goal.goalPendingReplyFor(conversationId)).toBeNull();
       }

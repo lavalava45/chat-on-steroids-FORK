@@ -964,6 +964,13 @@ export function pendingQueuedPickups(): Promise<Array<{ conversationId: string; 
       const candidates = pending.filter(row => row.sessionId === sessionId);
       const row = candidates.find(row => manualInput(row) && row.silenceBoundary) ?? candidates[0]!;
       if (!row.sessionId) continue;
+      // Automatic Continue reaches this queue only after its own silence/error recovery has
+      // already refreshed the source page. Keep the durable ticket available for the restored
+      // page to claim, but do not feed it into the generic 2/5/10/15-minute pickup-reload loop:
+      // that bought a second reload for the same interrupted turn and could strand the frozen
+      // Continue text in the composer. A genuinely absent/stalled page is recovered by the
+      // separate tab/silence repair owners instead.
+      if (row.recovery) continue;
       if (row.state !== 'queued' || (!queuedFollowup(row) && !manualInput(row)) || row.dueAt > Date.now()) continue;
       const session = await getSession(row.sessionId);
       if (!session?.conversationId || !queuedAfterTurn(row, session)) continue;
