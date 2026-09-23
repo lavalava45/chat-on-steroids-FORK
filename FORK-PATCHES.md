@@ -24,12 +24,13 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 5 | `profile-plugin-rebase` | permanent | Rebase cloned plugin generation directories into the active fork profile before plugin-record validation. |
 | 6 | `quiet-automation-boundaries` | permanent | Make Goal/Loop Off authoritative, keep automatic plugin refresh helpers in the background, and log browser-control caller ownership. |
 | 7 | `profile-safe-slot-handoff` | permanent | Send local A/B restart signals through the active source slot so isolated Electron profiles cannot start concurrently during handoff. |
+| 8 | `core-followup-auto-attach` | permanent | Keep Core selected on CoS-managed follow-up sends using the exact installed app identity; fail closed when structured attachment cannot be proved. Upstream candidate: #384. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 
 ## Updating from upstream
 
-Current selected baseline for the 2026-09-22 rebuild is upstream merge commit `93573d8` (`#370` plus its prerequisite post-2.1.14 stack).
+Current selected baseline is upstream merge commit `750fad9` (`#372`, including the reviewed #370 backlog integration underneath it).
 
 From a clean `our-release`, select the exact upstream tag/commit deliberately:
 
