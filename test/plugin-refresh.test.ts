@@ -77,9 +77,12 @@ it('persists one explicit retry with a fresh id while retaining the exact pendin
   expect(await claimPluginRefresh({ ...proof, id: first.id })).toBe(false);
   resetPluginRefreshForTests();
   publishPlugins(tools);
-  expect((await pendingPluginRefreshes())[0]?.id).toBe(next.id);
+  const restarted = (await pendingPluginRefreshes())[0]!;
+  expect(restarted.id).not.toBe(next.id);
+  expect((await pendingPluginRefreshes())[0]?.id).toBe(restarted.id);
   expect((await readDurable('plugin-refresh') as any[])[0].error).toBeUndefined();
-  expect(await claimPluginRefresh({ ...proof, id: next.id })).toBe(true);
+  expect(await claimPluginRefresh({ ...proof, id: next.id })).toBe(false);
+  expect(await claimPluginRefresh({ ...proof, id: restarted.id })).toBe(true);
   expect(await rearmPluginRefresh('plugins')).toBe(false);
 });
 
@@ -227,16 +230,25 @@ it('recognizes retired session only for old Core enrollment with two unchanged c
   expect(await completePluginRefresh({ ...request, appId, tools: [...current, session] })).toBe(false);
   expect(await completePluginRefresh({ ...request, appId, tools: current })).toBe(true);
 });
-it('keeps pre-claim errors observable and retries the same obligation after restart', async () => {
+it('rearms one unresolved first-time enrollment after app restart without polling it into new ids', async () => {
   publish(); const request = (await pendingPluginRefreshes())[0]!;
   expect(await failPluginRefresh({ id: request.id, error: 'Mapped plugin is not installed in this page' })).toBe(true);
   resetPluginRefreshForTests(); publish();
-  expect((await pendingPluginRefreshes())[0]?.id).toBe(request.id);
+  const restarted = (await pendingPluginRefreshes())[0]!;
+  expect(restarted.id).not.toBe(request.id);
+  expect((await pendingPluginRefreshes())[0]?.id).toBe(restarted.id);
   expect(await completePluginRefresh({ ...request, appId, tools })).toBe(false);
   expect((await readDurable('plugin-refresh') as any[])[0].attempted).toBe(false);
-  expect(await claim(request)).toBe(true);
+  expect(await claim(restarted)).toBe(true);
   expect((await readDurable('plugin-refresh') as any[])[0].error).toBeUndefined();
   expect(await pendingPluginRefreshes()).toEqual([]);
+});
+
+it('prioritizes Core enrollment ahead of Desktop and Plugins so follow-up attachment cannot starve', async () => {
+  publishPluginSurface('desktop', 'Chat On Steroids Desktop', '1', '', tools);
+  publishPlugins(tools);
+  publish();
+  expect((await pendingPluginRefreshes()).map(row => row.surface)).toEqual(['core', 'desktop', 'plugins']);
 });
 it('requires readable declarations before claiming even an enrolled exact app', async () => {
   publish(); const first = (await pendingPluginRefreshes())[0]!;

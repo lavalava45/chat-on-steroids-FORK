@@ -18,6 +18,7 @@ export interface PluginConnectorPresence {
 const publications = new Map<PluginSurface, PluginPublication>();
 const settling = new Map<PluginSurface, { schemaId: string; readyAt: number; timer?: ReturnType<typeof setTimeout> }>();
 let corePresenceCache: PluginConnectorPresence | null | undefined;
+const processRearmed = new Set<PluginSurface>();
 export const PLUGIN_REFRESH_DEBOUNCE_MS = 20_000;
 let chain: Promise<unknown> = Promise.resolve();
 function serial<T>(work: () => Promise<T>): Promise<T> { const result = chain.then(work, work); chain = result.catch(() => undefined); return result; }
@@ -139,20 +140,36 @@ export function pendingPluginRefreshes(): Promise<PluginRefreshRequest[]> {
     let changed = false;
     for (const publication of publications.values()) {
       const found = current.find(row => row.surface === publication.surface);
-      if (found?.schemaId === publication.schemaId) continue;
+      if (found?.schemaId === publication.schemaId) {
+        // A missing helper tab is intentionally not reopened on every maintenance poll.
+        // After the app itself restarts, however, a stale chrome.storage.session owner from
+        // the previous runtime must not strand first-time enrollment forever. Give each
+        // still-unenrolled surface one fresh request id per app process. If the user closes
+        // that new helper, the id stays stable for the rest of this process and the browser
+        // suppression continues to work as before.
+        if (!processRearmed.has(publication.surface) && found.appId === null && !found.attempted && !found.manual && found.completedSchemaId !== found.schemaId) {
+          found.id = randomUUID();
+          delete found.error;
+          changed = true;
+        }
+        processRearmed.add(publication.surface);
+        continue;
+      }
       const next: Row = { surface: publication.surface, schemaId: publication.schemaId, id: randomUUID(), appId: found?.appId ?? null, completedSchemaId: found?.completedSchemaId ?? null, attempted: false, manual: false };
       if (found) current[current.indexOf(found)] = next; else current.push(next);
+      processRearmed.add(publication.surface);
       changed = true;
     }
     if (changed) {
       await writeDurableNow('plugin-refresh', current);
       logInfo(`plugin refresh pending observed ${current.filter(row => !row.manual && row.completedSchemaId !== row.schemaId).map(row => `surface=${row.surface} schema=${row.schemaId.slice(0, 12)} dueInMs=${Math.max(0, (settling.get(row.surface)?.readyAt ?? 0) - Date.now())}`).join(' ')}`);
     }
+    const priority: Record<PluginSurface, number> = { core: 0, desktop: 1, plugins: 2 };
     return current.flatMap(row => {
       const publication = publications.get(row.surface);
       return publication && (settling.get(row.surface)?.readyAt ?? 0) <= Date.now() && publication.schemaId === row.schemaId && !row.attempted && !row.manual && row.completedSchemaId !== row.schemaId
         ? [{ ...structuredClone(publication), id: row.id, appId: row.appId }] : [];
-    });
+    }).sort((a, b) => priority[a.surface] - priority[b.surface]);
   });
 }
 type Identity = { id: string; appId: string };
@@ -224,4 +241,4 @@ export function failPluginRefresh(input: { id: string; error: string }): Promise
     row.error = input.error.slice(0, 200); await writeDurableNow('plugin-refresh', current); return true;
   });
 }
-export function resetPluginRefreshForTests(): void { for (const row of settling.values()) if (row.timer) clearTimeout(row.timer); settling.clear(); publications.clear(); corePresenceCache = undefined; chain = Promise.resolve(); }
+export function resetPluginRefreshForTests(): void { for (const row of settling.values()) if (row.timer) clearTimeout(row.timer); settling.clear(); publications.clear(); processRearmed.clear(); corePresenceCache = undefined; chain = Promise.resolve(); }
