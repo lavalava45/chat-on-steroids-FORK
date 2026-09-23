@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { handoffLaunchPlan } from './local-release-handoff.mjs';
 
 const [targetExe, statePath, targetSlot, branch, commit, sourceExe] = process.argv.slice(2);
 if (!targetExe || !statePath || !targetSlot || !branch || !commit || !sourceExe) {
@@ -29,18 +30,23 @@ function runningSourceProcesses() {
     });
 }
 
-function launch(args = []) {
-  const child = spawn(targetExe, args, { detached: true, stdio: 'ignore', windowsHide: false });
+function launch(exe, args = []) {
+  const child = spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: false });
   child.unref();
 }
+
+const plan = handoffLaunchPlan(sourceExe, targetExe);
 
 // Give the invoking COS enough time to deliver the completed command/tool response before the
 // primary starts shutting itself down. This helper is detached, so it survives that shutdown.
 await sleep(3000);
 
-// The first launch is intentionally a secondary instance. Electron forwards the flag to the
-// current primary, whose normal shutdown path drains bridges/plugins/durable state before exit.
-launch(['--fork-restart']);
+// The restart signal must be launched through the SOURCE executable. Slot profiles use different
+// Electron userData roots (and therefore different single-instance locks); launching the target
+// here would create a second primary instead of notifying the currently running source slot.
+// The source secondary forwards the flag to its own primary, whose normal shutdown path drains
+// bridges/plugins/durable state before exit.
+launch(plan.restart.exe, plan.restart.args);
 
 const deadline = Date.now() + 75_000;
 while (Date.now() < deadline) {
@@ -50,6 +56,6 @@ while (Date.now() < deadline) {
 
 if (runningSourceProcesses().length !== 0) process.exit(3);
 
-launch();
+launch(plan.target.exe, plan.target.args);
 fs.mkdirSync(path.dirname(statePath), { recursive: true });
 fs.writeFileSync(statePath, `${JSON.stringify({ active: targetSlot, branch, commit, switchedAt: new Date().toISOString() }, null, 2)}\n`);

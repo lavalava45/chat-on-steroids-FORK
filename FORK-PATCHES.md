@@ -23,6 +23,7 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 4 | `no-auto-debugger-lease` | permanent | Disable automatic Chrome debugger rendering leases; explicit browser tools still attach on demand. |
 | 5 | `profile-plugin-rebase` | permanent | Rebase cloned plugin generation directories into the active fork profile before plugin-record validation. |
 | 6 | `quiet-automation-boundaries` | permanent | Make Goal/Loop Off authoritative, keep automatic plugin refresh helpers in the background, and log browser-control caller ownership. |
+| 7 | `profile-safe-slot-handoff` | permanent | Send local A/B restart signals through the active source slot so isolated Electron profiles cannot start concurrently during handoff. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 
