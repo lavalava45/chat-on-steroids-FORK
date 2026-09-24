@@ -11,6 +11,7 @@ the app refuses the extension and asks you to reload the matching copy.
 
 ## Unreleased
 
+- Upgrade already-open tabs from the pre-v2 boolean usage observer in place, so extension updates restore exact request-origin evidence without forcing a ChatGPT page reload or leaving subsequent Core calls in Unattributed activity.
 - Keep fresh background workers rendering while their editor hydrates, including pending initial navigation and exact document retirement.
 - Read live alternate-shell request metadata and public activity before history hydration; place recorded tools beside native prose without a reload.
 - Restore versioned response observers without duplicate active readers and recognize complete identity in native resume streams.

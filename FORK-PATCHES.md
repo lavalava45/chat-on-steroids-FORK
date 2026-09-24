@@ -25,6 +25,7 @@ This table records the fork patches we maintain or have sent upstream. The autho
 | 6 | `quiet-automation-boundaries` | permanent | Make Goal/Loop Off authoritative, keep automatic plugin refresh helpers in the background, and log browser-control caller ownership. |
 | 7 | `profile-safe-slot-handoff` | permanent | Send local A/B restart signals through the active source slot so isolated Electron profiles cannot start concurrently during handoff. |
 | 8 | `core-followup-auto-attach` | permanent | Keep Core selected on CoS-managed follow-up sends using the exact installed app identity; fail closed when structured attachment cannot be proved; re-arm unresolved first-time enrollment once per app process and prioritize Core ahead of Desktop/Plugins. Upstream candidate: #384. |
+| 9 | `legacy-request-origin-upgrade` | temporary | When an already-open ChatGPT document still carries the pre-v2 boolean usage observer after an extension update, install the current disposable observer on top of the passive legacy fetch wrapper so exact `conversation_id + request_id` evidence resumes without an automatic page reload. |
 
 Each stack commit carries `Fork-Patch:` and `Fork-Patch-Status:` trailers so its purpose survives rebases even though commit hashes change.
 

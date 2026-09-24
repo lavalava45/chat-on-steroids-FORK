@@ -12,10 +12,17 @@
   const OBSERVER_VERSION = 2;
   const prior = window.__cosUsageObserver;
   if (prior?.version === OBSERVER_VERSION && typeof prior.refresh === 'function' && prior.refresh() === true) return;
-  // A legacy boolean has no listener/reader disposal handle. A fresh document is
-  // required to replace it; stacking another active observer is not a repair.
-  if (prior && typeof prior.dispose !== 'function') { window.__cosUsageObserverNeedsReload = true; return; }
-  prior?.dispose();
+  // Pre-v2 builds left only a boolean sentinel and a fetch wrapper behind. Chrome keeps
+  // that MAIN-world wrapper alive when an unpacked extension is updated, so merely
+  // re-injecting this file used to return here and leave the tab permanently unable to
+  // publish request-origin evidence until a full page reload. The legacy wrapper is passive:
+  // it forwards the original fetch result unchanged and only projects usage metadata. It is
+  // therefore safe to put the disposable v2 observer on top of it. A later v2 re-injection
+  // can then refresh/replace normally, while the one legacy wrapper remains inert for request
+  // attribution and disappears on the next ordinary navigation.
+  const legacy = Boolean(prior && typeof prior.dispose !== 'function');
+  if (!legacy) prior?.dispose();
+  if (legacy) window.__cosUsageObserverNeedsReload = false;
   let active = true;
   const nativePost = window.postMessage.bind(window);
   const post = (...args) => { if (active) nativePost(...args); };

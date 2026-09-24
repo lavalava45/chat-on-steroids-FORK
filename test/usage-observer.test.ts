@@ -136,9 +136,20 @@ describe('MAIN-world usage projection', () => {
     await h.feedSse([`data: {"conversation_id":"${id}","metadata":{"request_id":"wfr_replaced"}}\n\n`]);
     expect(h.posts.filter(row => row.requestIds?.includes('wfr_replaced'))).toHaveLength(1);
   });
-  it('requires a fresh document for a legacy observer without a disposal handle', () => {
+  it('upgrades a legacy boolean observer in place so an already-open tab regains request-origin evidence', async () => {
     const h = harness(); h.markLegacy(); const before = h.currentFetch();
-    h.evaluate(); expect(h.needsReload()).toBe(true); expect(h.currentFetch()).toBe(before);
+    h.evaluate();
+    expect(h.needsReload()).toBe(false);
+    expect(h.currentFetch()).not.toBe(before);
+    expect(h.observer()).toMatchObject({ version: 2 });
+    expect(h.observer().current()).toBe(true);
+    const conversationId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    await h.feedSse([
+      `data: {\"conversation_id\":\"${conversationId}\",\"metadata\":{\"request_id\":\"wfr_legacy_upgrade\"}}\n\n`
+    ]);
+    expect(h.posts.filter(row => row.requestIds?.includes('wfr_legacy_upgrade'))).toEqual([
+      expect.objectContaining({ conversationId, requestIds: ['wfr_legacy_upgrade'] })
+    ]);
   });
   it('reads complete identity in the native f/conversation/resume stream without admitting arbitrary endpoints', async () => {
     const h = harness(), id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
