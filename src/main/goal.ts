@@ -63,6 +63,15 @@ import { foldProgress } from '../shared/session.js';
 import { modelFacingText } from '../shared/content-reference.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
 import { BROWSER_PICKUP_MAX_ATTEMPTS } from '../shared/recovery.js';
+import { goalCompletionEvidence, goalCompletionConstraint, goalCompletionContradictsStop } from './goal-completion-evidence.js';
+import { trustedGoalCompletionAdapters } from './goal-completion-adapters.js';
+
+/** Exact recorded source turn, not the latest open document or a model summary. */
+async function completionEvidenceForTurn(sessionId: string, conversationId: string, turnId: string) {
+  if (!trustedGoalCompletionAdapters.length) return null;
+  const events = await readRecentEvents(sessionId, MAX_TOOL_CALLS_COUNTED, { kinds: ['tool_call'] });
+  return goalCompletionEvidence(events.filter(event => event.kind === 'tool_call'), conversationId, turnId, trustedGoalCompletionAdapters);
+}
 
 /** A finish-only preference has authority only while the finish tool is available. */
 export async function astraFinishOnly(sessionId: string, conversationId: string): Promise<boolean> {
@@ -173,7 +182,7 @@ const REQUEST_TIMEOUT_MS = 180_000;
  * belongs to the page's Goal loop, which is the only place that can tell whether the turn is
  * still the one being answered. This is what that loop reads, published as `retryable`.
  */
-const SETTLED_FAILURE = /^(?:auth_rejected|out_of_credit|unknown_model|no_api_key|no_conversation|no_objective|invalid_provider|goal_marker_missing|goal_browser_cancelled|goal_browser_send_unconfirmed|goal_browser_send_failed)(?:$|:)/;
+const SETTLED_FAILURE = /^(?:auth_rejected|out_of_credit|unknown_model|no_api_key|no_conversation|no_objective|invalid_provider|goal_marker_missing|goal_browser_cancelled|goal_browser_send_unconfirmed|goal_browser_send_failed|goal_completion_evidence_unresolved)(?:$|:)/;
 
 /** One failure classification shared by ordinary drafts and the conversation-less opening request. */
 function retryableGoalFailure(error: string): boolean {
@@ -1941,7 +1950,9 @@ async function run(draft: GoalDraft): Promise<void> {
   draft.abort = abort;
   const timer = setTimeout(() => abort.abort(new DOMException('Goal request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
   try {
-    const decision = draft.backend === 'templates' ? templateGoalDecision(messages.filter((message) => message.role === 'assistant').at(-1)?.content ?? '', Math.floor(Math.random() * 200), Math.floor(Math.random() * 200)) : await requestDrivingDecision({
+    const evidence = await completionEvidenceForTurn(draft.sessionId, draft.conversationId, draft.turnId);
+    if (draft.acknowledged || drafts.get(draft.conversationId) !== draft) return;
+    const request: GoalRequest = {
       backend: draft.backend,
       endpoint,
       reasoning,
@@ -1972,9 +1983,22 @@ async function run(draft: GoalDraft): Promise<void> {
         draft.stage = 'answering';
         if (drafts.get(draft.conversationId) === draft) { draft.text = text; notifyGoalChange(); }
       }
-    });
+    };
+    const constraint = goalCompletionConstraint(evidence);
+    if (constraint) request.system.push(constraint);
+    let decision = draft.backend === 'templates'
+      ? templateGoalDecision(messages.filter(message => message.role === 'assistant').at(-1)?.content ?? '', Math.floor(Math.random() * 200), Math.floor(Math.random() * 200))
+      : await requestDrivingDecision(request);
+    if (goalCompletionContradictsStop(evidence, decision.action) && draft.backend !== 'templates') {
+      decision = await requestDrivingDecision({ ...request, system: [...request.system,
+        'The previous STOP conflicts with verified incomplete or blocked work. Respond with one safe specific step or an actionable blocker; do not replay an uncertain operation.'] });
+    }
     if (draft.acknowledged || drafts.get(draft.conversationId) !== draft) return;
     if (await astraFinishOnly(draft.sessionId, draft.conversationId)) return settle(draft, 'no-reply');
+    if (goalCompletionContradictsStop(evidence, decision.action)) {
+      logWarn(`goal: refused unsupported STOP for ${draft.conversationId} against trusted completion evidence`);
+      return settle(draft, 'failed', 'goal_completion_evidence_unresolved');
+    }
     // Logged like the exception path below. Ten rate limits in a row on 2026-09-02 left no
     // trace in app.log because a provider's refusal is an answer, not an exception.
     if (decision.action === 'http' || decision.action === 'invalid') {
@@ -2068,11 +2092,17 @@ export async function draftFastFollowup(sessionId: string, signal: AbortSignal =
     ['tool', 'sent'].includes(entry.state)).slice(-5).map(entry => entry.text);
   const messages = preparedMessages ?? await conversationMessages(sessionId, appInput);
   if (!objective && !messages.some(message => message.role === 'user')) throw new Error('No recorded user request is available for Goal');
+  const [sourceEnd] = await readRecentEvents(sessionId, 1, { kinds: ['turn_end'] });
+  const sourceTurnId = session.activeTurnId ?? sourceEnd?.turnId;
+  const evidence = sourceTurnId ? await completionEvidenceForTurn(sessionId, session.conversationId, sourceTurnId) : null;
   const prompt = mode === 'loop' ? settings.loopPrompt : objective ? settings.objectivePrompt : settings.prompt;
-  const decision = backend === 'templates'
+  const system = objective ? [prompt, goalObjectiveMessage(objective)] : [prompt];
+  const constraint = goalCompletionConstraint(evidence);
+  if (constraint) system.push(constraint);
+  let decision = backend === 'templates'
     ? templateGoalDecision(messages.filter(message => message.role === 'assistant').at(-1)?.content ?? '', Math.floor(Math.random() * 200), Math.floor(Math.random() * 200))
     : await requestDrivingDecision({ sourceSessionId: sessionId, backend, endpoint, reasoning: settings.reasoning, key: key ?? '', model: settings.model, mode,
-    system: objective ? [prompt, goalObjectiveMessage(objective)] : [prompt],
+    system,
     messages,
     trailer: mode === 'loop' ? GOAL_LOOP_TRAILER : objective ? GOAL_OBJECTIVE_TRAILER : GOAL_SYSTEM_TRAILER, signal, publish })
       .catch(error => {
@@ -2080,6 +2110,14 @@ export async function draftFastFollowup(sessionId: string, signal: AbortSignal =
         signal.throwIfAborted();
         throw nativeGoalFailure(`request_failed: ${error instanceof Error ? error.message : error}`, backend);
       });
+  if (goalCompletionContradictsStop(evidence, decision.action) && backend !== 'templates') {
+    decision = await requestDrivingDecision({ sourceSessionId: sessionId, backend, endpoint, reasoning: settings.reasoning,
+      key: key ?? '', model: settings.model, mode, system: [...system,
+        'A STOP conflicts with verified unfinished or uncertain tool work. Give one safe next step or report the blocker.'],
+      messages, trailer: mode === 'loop' ? GOAL_LOOP_TRAILER : objective ? GOAL_OBJECTIVE_TRAILER : GOAL_SYSTEM_TRAILER,
+      signal, publish });
+  }
+  if (goalCompletionContradictsStop(evidence, decision.action)) throw new Error('goal_completion_evidence_unresolved');
   if (decision.action === 'stop') {
     if (mode === 'loop') throw new Error('loop_stop_refused');
     return null;

@@ -31,6 +31,7 @@ const explanations: Readonly<Record<string, string>> = {
   nothing_to_open_with: 'The helper did not produce an opening message. Make the task more specific and try again.',
   loop_stop_refused: 'The helper kept choosing to stop instead of writing a Loop continuation. Review the Loop instructions or choose another helper model.',
   goal_marker_missing: 'The answer is missing the completion marker required by offline Goal templates. Check the template instructions or choose another continuation source.',
+  goal_completion_evidence_unresolved: 'A trusted tool still reports unfinished or uncertain work, but the Goal helper could not produce a safe continuation. Automatic retries are paused. Review the blocker before resuming.',
   goal_reply_not_durable: 'The app could not save the pending continuation. Check free disk space and the app diagnostics.',
   goal_ack_not_durable: 'The app could not save the delivery confirmation. Check free disk space; check the chat before manually resending.',
   goal_switch_not_durable: 'The app could not save the Goal/Loop setting. Check free disk space and try saving it again.',
