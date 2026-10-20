@@ -29,7 +29,8 @@ import { randomUUID } from 'node:crypto';
 import { beginToolTiming, inboundRequestId, inboundPublication, inboundProviderRequest } from './inbound.js';
 import { McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import type { Capabilities, Root } from '../../shared/types.js';
+import type { Capabilities, RemoteFolder, Root } from '../../shared/types.js';
+import { fsForRoot } from '../remote/project-fs.js';
 import { CAPABILITY_LABELS, WRITE_CAPABILITIES } from '../../shared/types.js';
 import { FsOpError, formatBytes, type FileInfo } from '../fsops.js';
 import { logInfo, logWarn } from '../logger.js';
@@ -91,6 +92,7 @@ import {
   noteOutcome,
   holdWhileSettling,
   runInCallContext,
+  noteCallReleased,
   runningToolProgress,
   setRequestOwner,
   trackInFlight,
@@ -98,6 +100,7 @@ import {
   type CallContext,
   type CallCaller
 } from './call-context.js';
+import { openCallHold } from '../rotation-hold.js';
 import {
   REQUEST_ID_GRACE_MS,
   awaitFreshCallOrigin,
@@ -666,10 +669,15 @@ export async function dispatch(
     );
     // In-process callers have no socket; resolving their outer invocation publishes it.
     if (!parent && !inboundPublication()) context.publication!.completedAt = Date.now();
+    // Only a provider request has a response ChatGPT receives; in-process callers prove nothing.
+    if (!parent && inboundPublication()) noteCallReleased(context);
     if (!result.isError) confirmUse?.();
     return result;
   } catch (error) {
-    if (!parent) context.publication!.failed = true;
+    if (!parent) {
+      context.publication!.failed = true;
+      if (inboundPublication()) noteCallReleased(context);
+    }
     throw error;
   }
 }
@@ -1160,6 +1168,9 @@ async function dispatchTracked(
   // are measured separately because a row cannot contain the time of its own later commit.
   const durationMs = recorderStartedAt - startedAt;
   markTiming('delivery');
+  // #1662: a call recorded while its answer is still held lets a due fresh-turn continue go in
+  // while ChatGPT still sees the call running; the answer waits for it below, bounded.
+  const closeHold = !nested && context.caller.conversationId ? openCallHold(context.caller.conversationId) : null;
   const recording = recordToolCall({
     nested,
     tool: name,
@@ -1183,7 +1194,7 @@ async function dispatchTracked(
   // broken history never breaks the tool itself. Only the degraded/unidentified path remains
   // fire-and-forget because it may still spend a grace window waiting for page evidence.
   if (context.caller.conversationId) {
-    await recording;
+    try { await recording; } finally { await closeHold?.(); }
   } else {
     void recording.then(() => logInfo(`mcp recording surface=${surface} recorder_async_ms=${Date.now() - recorderStartedAt}`));
     holdWhileSettling(context, recording);
@@ -1301,7 +1312,14 @@ async function liveWorkspace(): Promise<{ workspace: { virtual: string; real: st
   if (!learned) return { workspace: null, missing: null };
   // A learned folder can be deleted while its chat sleeps. Keeping it would make every
   // relative path and every command without a workdir fail with "Not found" for that folder.
-  const exists = await fs.stat(learned.real).then((stat) => stat.isDirectory(), () => false);
+  // A folder on a server (#1469) is checked there. Only a folder that is gone is forgotten: a
+  // connection that failed keeps it, and the call that needs it says why it cannot reach it.
+  const name = learned.virtual.split('/').find(part => part.length > 0)?.toLowerCase();
+  const server = getConfig().roots.find(root => root.remote !== undefined && root.name.toLowerCase() === name);
+  const exists = server
+    ? await fsForRoot(server).getMetadata(learned.real).then(meta => meta.isDirectory,
+      (error: { code?: string }) => error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR')
+    : await fs.stat(learned.real).then((stat) => stat.isDirectory(), () => false);
   if (exists) return { workspace: learned, missing: null };
   forgetMissingWorkspace(learned.real);
   return { workspace: null, missing: learned.virtual };
@@ -1310,7 +1328,7 @@ async function liveWorkspace(): Promise<{ workspace: { virtual: string; real: st
 export async function resolveIn(
   roots: Parameters<typeof resolvePath>[0],
   requested: string,
-  options: { allowMissing?: boolean; base?: string | null; access?: 'read' } = {}
+  options: { allowMissing?: boolean; base?: string | null; access?: 'read'; remote?: boolean } = {}
 ): Promise<Resolved> {
   // The user's own Skill folders are served only to read tools, and never become a workspace.
   if (isUserSkillVirtualPath(requested)) {
@@ -1327,6 +1345,7 @@ export async function resolveIn(
   const base = options.base !== undefined ? options.base : (workspace?.virtual ?? null);
   const resolveOptions = {
     ...(options.allowMissing === undefined ? {} : { allowMissing: options.allowMissing }),
+    ...(options.remote === undefined ? {} : { remote: options.remote }),
     base
   };
   const resolved = await resolveLinkedSkillAlias(roots, requested, resolveOptions) ??
@@ -1342,6 +1361,8 @@ export interface ResolvedCwd {
   virtual: string;
   /** True when the caller named no folder, so the workspace or first root was used instead. */
   defaulted: boolean;
+  /** Set when the folder is on a server (#1469): commands then run there over ssh. */
+  remote?: RemoteFolder;
 }
 
 /**
@@ -1369,7 +1390,12 @@ export async function resolveCwd(ctx: ToolContext, virtualPath: string | undefin
   const fallback = firstTaskRoot(ctx.roots);
   const target = provided ? virtualPath : (workspace?.virtual ?? (fallback ? `/${fallback.name}` : ''));
   if (!target) throw new SandboxError('No folder is approved, so there is nowhere to run');
-  const resolved = await resolveIn(ctx.roots, target);
+  const resolved = await resolveIn(ctx.roots, target, { remote: true });
+  const { remote } = resolved.root;
+  if (remote) {
+    if (!(await fsForRoot(resolved.root).getMetadata(resolved.real)).isDirectory) throw new SandboxError('workdir must be a folder');
+    return { real: resolved.real, virtual: resolved.virtual, defaulted: !provided, remote };
+  }
   const stat = await fs.stat(resolved.real);
   if (!stat.isDirectory()) throw new SandboxError('workdir must be a folder');
   return { real: resolved.real, virtual: resolved.virtual, defaulted: !provided };
