@@ -1,0 +1,30 @@
+{
+  "baseCommit": "ba9e911f0d413eefcb04656bf0d699e72722bc45",
+  "fixedCommit": "53cb09d7f8b952b633849085f786543b9917dd90",
+  "baseRun": {
+    "failed": 2,
+    "skipped": 215,
+    "failures": [
+      {
+        "test": "one browser maintenance flight per desktop outbox publication reports a missing ready opening tab without replacing it, including after restart",
+        "status": "failed",
+        "reason": "AssertionError: expected [] to have a length of 1 but got +0"
+      },
+      {
+        "test": "one browser maintenance flight per desktop outbox publication reports a missing preparing opening tab without replacing it, including after restart",
+        "status": "failed",
+        "reason": "AssertionError: expected [] to have a length of 1 but got +0"
+      }
+    ]
+  },
+  "fixedFocusedRun": {
+    "passed": 1104,
+    "failed": 0
+  },
+  "electronRenderer": {
+    "script": "node scripts/verify-ui.mjs input-queue",
+    "passed": 19,
+    "scope": "isolated production renderer fixture, no provider send"
+  },
+  "fullLocalVerify": "pending"
+}
