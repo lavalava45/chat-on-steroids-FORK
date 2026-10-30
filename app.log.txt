@@ -1,0 +1,3 @@
+2026-10-30T17:41:01.831Z  info   app started
+2026-10-30T17:41:04.919Z  info   bridge listening on 127.0.0.1:8765
+2026-10-30T17:41:12.607Z  info   bridge: browser extension 2.1.48 connected (build f752f3080f29)

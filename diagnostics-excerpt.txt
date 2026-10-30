@@ -1,0 +1,53 @@
+# Chat On Steroids diagnostics report
+
+Created 2026-10-30T17:28:37.936Z.
+This file is meant for a bug report. It contains versions, settings (on/off values, numbers and option names),
+the connection state, memory use per kind of process, pending work (step names and times) and the app log.
+Personal details are replaced: your user name, folder and file names, chat titles, tasks, email addresses,
+keys and private addresses become tags like <p:1a2b>. Please read it before you share it.
+
+## App
+
+Version: 2.1.48
+System: win32 10.0.26100 (x64), locale en-US
+Electron 44.3.0, Chrome 152.0.7977.78
+
+
+## Install and updates
+
+Installed as: Windows installer, custom folder (packaged)
+App folder writable by the app: yes
+Update: up to date (2.1.48), checked 5 min ago
+
+
+## System
+
+Memory: 31.9 GB total, 10.3 GB free
+CPU: Intel(R) Core(TM) i7-7700 CPU @ 3.60GHz, 8 cores
+Free disk space where the app keeps its data: 361.0 GB
+App running for 7 h 27 min
+Display scale: 1, 1
+
+
+## Crashes and restarts
+
+Crash reports in the last 30 days: 0
+This run: no restarts or sleep recorded
+
+
+## Startup
+
+This start: usable after 32.03 s (Electron ready 3.35 s, settings 3.81 s, chats restored 13.61 s, ChatGPT tunnel 31.28 s, app window ready 32.03 s); window loaded 34.56 s, browser extension 67.86 s
+Earlier starts (2): usable after 21.45 s typically, 10.95 s at the fastest, 21.45 s at the slowest
+
+
+## Browser and ChatGPT page
+
+Browser: Google Chrome 156.0.8078.49
+ChatGPT tabs: 1 open, 0 discarded, 0 frozen, 0 loading, 0 in a tab group, 0 in the app's background window
+Page checks (most recently used ChatGPT tab): composer found, send area found, model menu found, + menu found, page language en-US
+
+
+
+Excerpt only. The full report remains local because it includes unrelated sessions.
+

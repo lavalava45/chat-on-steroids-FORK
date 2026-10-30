@@ -1,0 +1,23 @@
+{
+  "scope": "Sanitized live observations; identifiers replaced with placeholders. The initial disappearance of the tab is unexplained.",
+  "before": {
+    "appVersion": "2.1.48 (fork)",
+    "extensionVersion": "2.1.48",
+    "extensionBuild": "cdd7197bf59c",
+    "input": {"state":"queued","opening":true,"owner":null,"offeredAt":"absent","sendAuthorizedAt":"absent","deliveredAt":"absent","conversationId":null},
+    "election": {"stage":"ready","tab":"<elected-tab>","conversationId":null},
+    "tabsGetError": "No tab with id: <elected-tab>.",
+    "electedExists": false,
+    "matchingTabs": [],
+    "registry": {"documentId":null,"epoch":null,"conversation":null}
+  },
+  "after": {
+    "appVersion": "2.1.48 (fork with focused fix)",
+    "extensionBuild": "f752f3080f29",
+    "input": {"state":"failed","owner":null,"offeredAt":"absent","sendAuthorizedAt":"absent","deliveredAt":"absent","conversationId":null},
+    "error": "Not sent: the browser tab for this new chat was closed or lost. Review the message and send again.",
+    "composerRestoredWithoutSend": true,
+    "note": "Existing Retry delivery restored the text. The unrecorded reserved session rejected changing Goal with session_not_recorded; the original Goal/model choices were therefore restored in a new unsent draft in the same local project. No Send was pressed."
+  },
+  "upstreamProof": "The ready/preparing missing-tab VM regression fails on untouched stable 3bcf8fd0 and passes with the focused fix. This is not a fresh end-to-end provider reproduction on the official binary."
+}
